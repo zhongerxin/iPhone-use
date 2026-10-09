@@ -13,7 +13,7 @@ FILES=('plugin.json','mcp.json','.mcp.json','.codex-plugin/plugin.json','.agents
 DIRS=('assets','server','skills')
 INSTALL_SCRIPTS=('phone.py','wda.sh','update_app_catalog.py','check_screen_ui.py','package.py','install.sh','register_mcp.py')
 SOURCE_DIRS=('scripts','tests','.github')
-TOOLING_FILES=('package.json','package-lock.json','forward.mjs','screen-stream.mjs')
+TOOLING_FILES=('package.json','package-lock.json','forward.mjs','screen-stream.mjs','device-transport.mjs')
 
 
 def package_files(source_package=False):

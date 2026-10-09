@@ -4,7 +4,7 @@
 
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 
-让 Codex 通过 USB 操作你的真实 iPhone。用自然语言描述任务，Codex 就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。
+让 Codex 通过 USB 或 Wi-Fi 操作你的真实 iPhone。用自然语言描述任务，Codex 就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。
 
 iPhone Use 使用 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA）与 iPhone 通信，包含本地 MCP 服务、安装与使用技能，以及实时屏幕 widget。它优先复用现有连接与构建；控件定位失败时，指导模型查看截图并尝试坐标点击。
 
@@ -84,6 +84,12 @@ sh scripts/install.sh
 > 用 iphone-use-setup 帮我配置通过 USB 连接的 iPhone，安装并启动 WDA，验证 READY，然后显示手机屏幕。
 
 技能引导 Codex 完成诊断、设备发现、签名配置、获取 WDA、后台构建与启动。已配置过的设备会复用配置和构建，正常任务不需要每次重装。`pua_ready` 返回 `ready=true` 后才开始手机任务。
+
+### USB 与 Wi-Fi
+
+首次安装和配对仍使用 USB。完成配对后，保持 iPhone 与 Mac 在同一 Wi-Fi，Xcode 能通过网络连接设备时，控制通道与右侧实时画面会优先使用 USB；USB 不可用时，自动连接该设备的 CoreDevice 隧道，无需填写手机 IP。重新连接 USB 后，新连接恢复优先走 USB。
+
+切换期间画面可能短暂中断；已经发出的点击、拖动不会自动重试。请等待画面恢复后继续操作。手机锁屏、网络隔离或 Xcode 隧道断开时需先恢复连接；Wi-Fi 不会消除 WDA/XCTest 本身的操作延迟。
 
 ## 可以做什么
 

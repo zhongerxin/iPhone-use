@@ -418,18 +418,19 @@ class ScreenHub:
             source = Path(__file__).resolve().parents[1] / "tooling/screen-stream.mjs"
             if not node or not (runtime / "node_modules/appium-ios-device").is_dir() or not source.is_file():
                 return None
-            target = runtime / "screen-stream.mjs"
-            source_bytes = source.read_bytes()
-            if not target.is_file() or target.read_bytes() != source_bytes:
-                fd, temporary = tempfile.mkstemp(prefix=".screen-stream-", dir=runtime)
-                try:
-                    os.fchmod(fd, 0o600)
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(source_bytes)
-                    os.replace(temporary, target)
-                finally:
-                    if os.path.exists(temporary):
-                        os.unlink(temporary)
+            for name in ("device-transport.mjs", "screen-stream.mjs"):
+                target = runtime / name
+                source_bytes = (source.parent / name).read_bytes()
+                if not target.is_file() or target.read_bytes() != source_bytes:
+                    fd, temporary = tempfile.mkstemp(prefix=".screen-stream-", dir=runtime)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, "wb") as stream:
+                            stream.write(source_bytes)
+                        os.replace(temporary, target)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.unlink(temporary)
             return [node, str(target), udid, str(port)]
         except (OSError, ValueError, AttributeError):
             return None

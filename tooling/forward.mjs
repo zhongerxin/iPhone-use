@@ -1,3 +1,4 @@
+import { createConnector } from './device-transport.mjs';
 import net from 'node:net';
 import iosDevice from 'appium-ios-device';
 
@@ -11,6 +12,7 @@ function port(value) {
 }
 const localPort = port(localArgument);
 const devicePort = port(deviceArgument);
+const connectDevice = createConnector((...args) => iosDevice.utilities.connectPort(...args));
 const sockets = new Set();
 let stopping = false;
 const server = net.createServer(async client => {
@@ -19,7 +21,7 @@ const server = net.createServer(async client => {
   client.on('error', () => client.destroy());
   client.on('close', () => sockets.delete(client));
   try {
-    const remote = await iosDevice.utilities.connectPort(udid, devicePort);
+    const remote = await connectDevice(udid, devicePort);
     if (stopping || client.destroyed) { remote.destroy(); return; }
     remote.setNoDelay?.(true);
     sockets.add(remote);
@@ -28,12 +30,12 @@ const server = net.createServer(async client => {
     client.on('close', () => remote.destroy());
     client.pipe(remote).pipe(client);
   } catch (error) {
-    console.error(`USB connect failed: ${error.message}`);
+    console.error(`Device connect failed: ${error.message}`);
     client.destroy();
   }
 });
-server.on('error', error => { console.error(`USB forward failed: ${error.message}`); process.exitCode = 1; stop(); });
-server.listen(localPort, '127.0.0.1', () => console.log(`WDA USB forward listening at 127.0.0.1:${localPort}`));
+server.on('error', error => { console.error(`USB/Wi-Fi forward failed: ${error.message}`); process.exitCode = 1; stop(); });
+server.listen(localPort, '127.0.0.1', () => console.log(`WDA USB/Wi-Fi forward listening at 127.0.0.1:${localPort}`));
 function stop() {
   if (stopping) return;
   stopping = true;
