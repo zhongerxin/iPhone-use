@@ -75,9 +75,6 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 #app[data-operating="true"] .glow i:nth-child(2){animation:glow-b var(--glow-cycle) linear infinite}
 #app[data-operating="true"] .glow i:nth-child(3){animation:glow-c var(--glow-cycle) linear infinite}
 #app[data-page-visible="false"] .glow,#app[data-page-visible="false"] .glow i:nth-child(n),#app[data-page-visible="false"] .dot{animation-play-state:paused}
-.dynamic-island{position:absolute;z-index:3;left:50%;top:calc(var(--bezel) * 1.17);width:calc(var(--bezel) * 11.25);height:calc(var(--bezel) * 3.46);transform:translateX(-50%);border-radius:999px;background:#030405;box-shadow:0 0 0 .5px #00000099,inset 0 .5px 0 #ffffff0d;pointer-events:none}
-.dynamic-island::after{content:"";position:absolute;right:calc(var(--bezel) * .66);top:50%;width:calc(var(--bezel) * 1.65);height:calc(var(--bezel) * 1.65);transform:translateY(-50%);border-radius:50%;background:radial-gradient(circle at 43% 38%,#274271 0%,#111d31 27%,#090c12 54%,#010203 73%);box-shadow:inset 0 0 0 .6px #111620;opacity:.7}
-#device[data-orientation="landscape"] .dynamic-island{left:calc(var(--bezel) * 2.9);top:50%;transform:translate(-50%,-50%) rotate(-90deg)}
 .gesture-cursor{position:absolute;z-index:4;width:26px;height:26px;margin:-13px 0 0 -13px;border:1.5px solid #ffffffe6;border-radius:50%;background:#80808066;box-shadow:0 0 0 1px #4c4c4c66,0 2px 6px #00000026;pointer-events:none;will-change:transform,opacity}
 @keyframes glow-breathe{0%,100%{opacity:.8}50%{opacity:1}}
 @keyframes glow-a{0%,100%{opacity:1}33.33%,66.66%{opacity:0}}
@@ -121,7 +118,6 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
             <div class="glow-colors"><i></i><i></i><i></i></div>
             <div class="glow-dots"><i></i><i></i><i></i></div>
           </div>
-          <div class="dynamic-island" aria-hidden="true"></div>
           <div id="cursor" class="gesture-cursor" aria-hidden="true" hidden></div>
         </div>
       </div>
