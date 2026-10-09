@@ -125,9 +125,14 @@ class AppCatalog:
         self.setup_manager = setup_manager
 
     @staticmethod
+    def _installed_apps(document):
+        result = document.get("result") if isinstance(document, dict) else None
+        apps = result.get("apps", result.get("installedApps")) if isinstance(result, dict) else None
+        return apps if isinstance(apps, (list, dict)) else None
+
+    @staticmethod
     def parse_installed(document):
-        result = document.get("result", {}) if isinstance(document, dict) else {}
-        apps = result.get("apps", result.get("installedApps", [])) if isinstance(result, dict) else []
+        apps = AppCatalog._installed_apps(document)
         if isinstance(apps, dict):
             apps = [{"bundleIdentifier": key, **value} for key, value in apps.items() if isinstance(value, dict)]
         rows, seen = [], set()
@@ -178,7 +183,7 @@ class AppCatalog:
                                      "--include-all-apps", "--json-output", name, "--timeout", "8"],
                                     text=True, capture_output=True, timeout=10, check=False)
             document = _read(name, {})
-            if result.returncode != 0 or not isinstance(document.get("result", {}).get("apps"), (list, dict)):
+            if result.returncode != 0 or self._installed_apps(document) is None:
                 return [], False, "Could not list selected-device apps. Unlock/connect the iPhone, verify Xcode pairing and retry; catalog candidates are not installation proof."
             rows = self.parse_installed(document)
             for row in rows:
