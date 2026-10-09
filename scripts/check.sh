@@ -6,6 +6,7 @@ cd "$task_root"
 export IPHONE_USE_ANALYTICS=0
 python3 -m unittest discover -s tests -v
 python3 scripts/package.py --validate-only
+python3 scripts/package_android.py --validate-only
 node --check tooling/forward.mjs
 node --check tooling/screen-stream.mjs
 python3 scripts/check_screen_ui.py

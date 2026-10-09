@@ -1,0 +1,3 @@
+uiautomator2==3.7.0
+adbutils==2.12.0
+Pillow==11.3.0

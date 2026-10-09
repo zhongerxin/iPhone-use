@@ -1,0 +1,20 @@
+{
+  "name": "android-use-local",
+  "interface": {
+    "displayName": "Android Use Local"
+  },
+  "plugins": [
+    {
+      "name": "android-use",
+      "source": {
+        "source": "local",
+        "path": "./android-use"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
