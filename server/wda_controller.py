@@ -230,9 +230,12 @@ class PhoneController:
         return app
 
     def tree(self, include_invisible=False, expensive_visibility=False):
-        path="/source?format=xml"
+        # wdAccessible may query native accessibility for each node and its parents.
+        # It is unused by observations/collection; exclude the attribute, not nodes.
+        excluded=["accessible"]
         if not expensive_visibility:
-            path+="&excluded_attributes=visible"
+            excluded.insert(0,"visible")
+        path="/source?format=xml&excluded_attributes="+",".join(excluded)
         raw=self.client.session("GET",path)
         if not isinstance(raw,str):
             fail("invalid_response", "PUA source is not XML text.")

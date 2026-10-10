@@ -593,6 +593,49 @@ class SetupManager:
                 "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"]), action]
 
     def setup(self, action, **args):
+        wait_seconds = args.pop("wait_seconds", 20 if action == "start" else 0)
+        if (isinstance(wait_seconds, bool) or not isinstance(wait_seconds, (int, float))
+                or not 0 <= wait_seconds <= 30):
+            return {"ok": False, "error": "wait_seconds must be between 0 and 30."}
+        if wait_seconds and action not in ("start", "status"):
+            return {"ok": False, "error": "wait_seconds is only supported for start/status."}
+        result = self._setup_once(action, **args)
+        if not result.get("ok") or not wait_seconds:
+            return result
+        job_id = result.get("job_id") or (result.get("job") or {}).get("id") or args.get("job_id")
+        if not job_id:
+            return result
+        # Wait outside the lifecycle lock: status/stop and the worker remain usable.
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            status = self._setup_once("status", job_id=job_id)
+            if not status.get("ok"):
+                return status
+            job = status["jobs"][0]
+            service = status["service"]
+            if job.get("action") not in ("start", "recover"):
+                return result
+            serving = job.get("action") != "recover" or job.get("recovery_phase") == "serving"
+            if job.get("state") not in ACTIVE_STATES:
+                reason = "job_finished"
+            elif service.get("ready") and serving:
+                reason = "service_ready"
+            elif time.monotonic() >= deadline:
+                reason = "timeout"
+            else:
+                time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+                continue
+            result.update(service=service, wait_reason=reason, retry_after_seconds=1 if reason == "timeout" else 0)
+            if action == "start":
+                result.update(job_id=job_id, job=job)
+            else:
+                result.update(jobs=status["jobs"])
+            result["next_step"] = ("Run pua_ready to verify the full phone channel." if reason == "service_ready"
+                                   else "Inspect this job's failure/logs." if reason == "job_finished"
+                                   else "Query status with the same job_id and wait_seconds=20; do not start again.")
+            return result
+
+    def _setup_once(self, action, **args):
         allowed = {"discover", "fetch", "configure", "build", "start", "stop", "status"}
         if action not in allowed:
             return {"ok": False, "error": "Unsupported setup action.", "actions": sorted(allowed)}

@@ -1,7 +1,7 @@
 {
   "name": "iphone-use",
-  "version": "0.3.6",
-  "description": "让 Codex 通过 USB 操作真实 iPhone，支持引导安装、App 自动化、实时屏幕和截图回退。",
+  "version": "0.3.8",
+  "description": "让 Codex 通过 USB 操作真实 iPhone，支持引导安装、App 自动化、实时屏幕和截图回退。 本对话首次使用先 setup 复用或启动服务，等待就绪后再 READY。",
   "author": {
     "name": "ZHONG XIN"
   },
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "iPhone Use",
     "shortDescription": "Let Codex control your iPhone",
-    "longDescription": "通过 PUA（Phone Use Agent）读取和操作真实 iPhone，自动诊断 USB、Xcode 与签名配置，复用健康连接完成点击、滚动、输入和连续任务。实时显示手机屏幕；控件定位失败时结合截图选择坐标，核验关键结果。",
+    "longDescription": "通过 PUA（Phone Use Agent）读取和操作真实 iPhone，自动诊断 USB、Xcode 与签名配置，复用健康连接完成点击、滚动、输入和连续任务。实时显示手机屏幕；控件定位失败时结合截图选择坐标，核验关键结果。 本对话首次使用直接 setup 检查配置与服务，复用活动工作；start 有界等待就绪后再 READY，不先等 READY 失败。",
     "developerName": "ZHONG XIN",
     "category": "Productivity",
     "logo": "./assets/icon.svg",

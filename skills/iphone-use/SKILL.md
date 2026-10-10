@@ -1,6 +1,6 @@
 ---
 name: iphone-use
-description: 通过 PUA（Phone Use Agent）MCP 工具高效操作真实 iPhone；新对话默认先初始化并取得 READY，服务未启动时沿 setup 启动流程继续。默认乐观执行导航、点击、输入和滚动，在下一步观察时顺带判断进度，只对关键最终结果显式验收；指导 App 查找、列表采集、手机屏幕侧边栏及密码或 Face ID 认证接管。
+description: 通过 PUA（Phone Use Agent）MCP 工具高效操作真实 iPhone；本对话首次使用先直接 setup 检查并启动服务，再取得 READY，服务未启动时沿 setup 启动流程继续。默认乐观执行导航、点击、输入和滚动，在下一步观察时顺带判断进度，只对关键最终结果显式验收；指导 App 查找、列表采集、手机屏幕侧边栏及密码或 Face ID 认证接管。
 ---
 
 # 用 PUA 完成 iPhone 任务
@@ -13,7 +13,7 @@ description: 通过 PUA（Phone Use Agent）MCP 工具高效操作真实 iPhone�
 
 ## READY 与认证
 
-正常任务在本对话首次使用手机时，默认调用 `pua_ready(recover=true, screenshot=false)`；文字任务保留 status / session / tree / viewport / 解锁检查，无需额外截图。已有本对话 READY 且通道未失效则直接复用，不为每步重验。`recover=false` 仅用于用户明确禁止重启或明确要求只读诊断，不能因谨慎主动设置或自动覆盖用户限制。
+正常任务在本对话首次使用手机时，先直接调用 `pua_setup(action="status")`，按 [启动与恢复](references/startup.md) 复用健康服务或活动工作，缺少服务才 start 一次；服务就绪后调用 `pua_ready(recover=true, screenshot=false)`，不要先等 READY 失败才 setup；文字任务保留 status / session / tree / viewport / 解锁检查，无需额外截图。已有本对话 READY 且通道未失效则直接复用，不为每步重验。`recover=false` 仅用于用户明确禁止重启或明确要求只读诊断，不能因谨慎主动设置或自动覆盖用户限制。
 
 - `ready=true, state="ready"`：通道已可用。直接复用 READY 中的 `observation` 准备下一步，不立即重复 observe，也不再加一轮 doctor、观察或导航预检。
 - `ready=false, state="recovering"` 或 `state="recovery_required"`：没有 error、MCP isError=false，仍不表示手机可操作。按 [启动与恢复](references/startup.md) 查询同一工作或按用户限制处理。
@@ -60,6 +60,8 @@ for (const block of result.content ?? []) {
 以上用于可恢复的界面定位问题。参数错误按 schema 修正，通道故障恢复 READY，锁屏 / 认证等用户完成。动作是否生效不确定时先读真实状态，不能重放输入、发送、下单或整个批次；截图足以处理的常规遮挡应继续尝试，不提前把任务交还用户。
 
 ## App 与常规动作
+
+需要把手机中的图片、视频或其他文件传回 Mac 使用时，参照 [AirDrop 文件传回 Mac](references/airdrop.md)，发送后到下载目录找到文件即可使用。
 
 已知并核验过的 bundle ID 可直接 launch；需要离线查常用 App 时用 `pua_apps(source="catalog", query=...)` 或 [常用 App 目录](references/apps.md)。未知或同名 App 用 `source="auto"` 查本机候选，仍无结果才查 Apple。不要连续猜 ID；招商银行主应用为 `com.cmbchina.MPBBank`。商店或目录记录不证明本机安装，`installed_verified=true` 才是安装证据。启动后准备下一步的观察会同时显示实际前台，不额外增加默认前台验收。
 

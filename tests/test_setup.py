@@ -30,6 +30,61 @@ class SetupTests(unittest.TestCase):
         return {"id": "a" * 32, "action": "start", "state": "running", "pid": pid,
                 "owner_token": token, "created_at": "2026-10-06T00:00:00Z", "config": {}}
 
+    def test_start_waits_for_service_without_creating_another_job(self):
+        job = {"id": "a" * 32, "action": "start", "state": "running"}
+        queued = {"ok": True, "job_id": job["id"], "job": job}
+        pending = {"ok": True, "jobs": [job], "service": {"ready": False}}
+        serving = {"ok": True, "jobs": [job], "service": {"ready": True}}
+        with patch.object(self.manager, "_setup_once", side_effect=[queued, pending, serving]) as setup, \
+             patch.object(wda_setup.time, "sleep") as sleep:
+            result = self.manager.setup("start")
+        self.assertEqual(result["wait_reason"], "service_ready")
+        self.assertTrue(result["service"]["ready"])
+        self.assertEqual([call.args[0] for call in setup.call_args_list], ["start", "status", "status"])
+        self.assertEqual(setup.call_args_list[-1].kwargs, {"job_id": job["id"]})
+        sleep.assert_called_once()
+
+    def test_setup_wait_timeout_keeps_same_running_job(self):
+        job = {"id": "a" * 32, "action": "start", "state": "running"}
+        pending = {"ok": True, "jobs": [job], "service": {"ready": False}}
+        with patch.object(self.manager, "_setup_once", return_value=pending) as setup, \
+             patch.object(wda_setup.time, "monotonic", side_effect=[0, 20]), \
+             patch.object(wda_setup.time, "sleep") as sleep:
+            result = self.manager.setup("status", job_id=job["id"], wait_seconds=20)
+        self.assertEqual(result["wait_reason"], "timeout")
+        self.assertEqual(result["jobs"][0]["state"], "running")
+        self.assertTrue(all(call.args[0] == "status" for call in setup.call_args_list))
+        sleep.assert_not_called()
+
+    def test_setup_wait_recovery_requires_serving_phase(self):
+        job = {"id": "a" * 32, "action": "recover", "state": "running", "recovery_phase": "stopping"}
+        pending = {"ok": True, "jobs": [job], "service": {"ready": True}}
+        serving = {"ok": True, "jobs": [{**job, "recovery_phase": "serving"}], "service": {"ready": True}}
+        with patch.object(self.manager, "_setup_once", side_effect=[pending, pending, serving]), \
+             patch.object(wda_setup.time, "sleep") as sleep:
+            result = self.manager.setup("status", job_id=job["id"], wait_seconds=20)
+        self.assertEqual(result["jobs"][0]["recovery_phase"], "serving")
+        self.assertEqual(result["wait_reason"], "service_ready")
+        sleep.assert_called_once()
+
+    def test_setup_wait_returns_failed_job_without_retry(self):
+        job = {"id": "a" * 32, "action": "start", "state": "failed", "log_tail": "signing failed"}
+        with patch.object(self.manager, "_setup_once", side_effect=[
+                {"ok": True, "job_id": job["id"]},
+                {"ok": True, "jobs": [job], "service": {"ready": False}}]), \
+             patch.object(wda_setup.time, "sleep") as sleep:
+            result = self.manager.setup("start")
+        self.assertEqual(result["wait_reason"], "job_finished")
+        self.assertEqual(result["job"]["log_tail"], "signing failed")
+        sleep.assert_not_called()
+
+    def test_setup_wait_rejects_invalid_budget_before_start(self):
+        with patch.object(self.manager, "_setup_once") as setup:
+            for budget in (-1, 31, True, "20", float("nan")):
+                self.assertFalse(self.manager.setup("start", wait_seconds=budget)["ok"])
+            self.assertFalse(self.manager.setup("build", wait_seconds=20)["ok"])
+        setup.assert_not_called()
+
     def test_config_requires_explicit_signing_values_and_safe_ports(self):
         self.assertFalse(self.manager.setup("configure")["ok"])
         self.assertFalse(self.configure(local_port=80)["ok"])
@@ -144,7 +199,7 @@ class SetupTests(unittest.TestCase):
              patch.object(self.manager, "_probe_status", return_value={"ready": False}), \
              patch.object(wda_setup.sys, "platform", "darwin"), \
              patch.object(wda_setup.shutil, "which", return_value="/usr/bin/xcodebuild"):
-            result = self.manager.setup("start")
+            result = self.manager.setup("start", wait_seconds=0)
         self.assertFalse(result["ok"])
         self.assertIn("build successfully", result["error"])
 
@@ -155,7 +210,7 @@ class SetupTests(unittest.TestCase):
              patch.object(wda_setup.sys, "platform", "darwin"), \
              patch.object(wda_setup.shutil, "which", return_value="/usr/bin/xcodebuild"), \
              patch.object(self.manager, "_create_job") as create:
-            result = self.manager.setup("start")
+            result = self.manager.setup("start", wait_seconds=0)
         self.assertTrue(result["already_ready"])
         create.assert_not_called()
 
@@ -176,7 +231,7 @@ class SetupTests(unittest.TestCase):
              patch.object(wda_setup.shutil, "which", return_value="/test/tool"), \
              patch.object(wda_setup, "_run", return_value={"ok": True, "stdout": "v24.18.0"}), \
              patch.object(self.manager, "_create_job", return_value={"ok": True, "job_id": "fixture"}) as create:
-            result = self.manager.setup("start")
+            result = self.manager.setup("start", wait_seconds=0)
         return result, create
 
     def test_start_reuses_port_after_closed_forward_connection(self):

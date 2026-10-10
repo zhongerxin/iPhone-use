@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +56,43 @@ class PhoneCase(unittest.TestCase):
 
 
 class CompactObservationTests(PhoneCase):
+    def test_excluding_accessible_preserves_nested_content_and_controls(self):
+        # Containers/children with accessible=false must stay in the tree. Dropping
+        # the output attribute must not change bill text, field values or geometry.
+        root=ET.Element("XCUIElementTypeApplication", {
+            "type":"XCUIElementTypeApplication", "bundleId":"com.example.phone",
+            "x":"0", "y":"0", "width":"390", "height":"844"})
+        container=ET.SubElement(root,"XCUIElementTypeOther", {
+            **{k:str(v) for k,v in node("账单",kind="Other",x=0,y=100,width=390,height=600).items()},
+            "accessible":"false"})
+        for item in (node("咖啡店，-28.00元，09-01",accessible=True),
+                     node("咖啡店",kind="StaticText",y=250,accessible=False),
+                     node("搜索",kind="TextField",y=310,name="bill-search",value="咖啡",enabled=False,accessible=False),
+                     node("账单",kind="Button",y=400,enabled=True,accessible=True)):
+            ET.SubElement(container,item["type"],{
+                k:str(v).lower() if isinstance(v,bool) else str(v) for k,v in item.items()})
+        legacy=ET.tostring(root,encoding="unicode")
+        for element in root.iter():element.attrib.pop("accessible",None)
+        lean=ET.tostring(root,encoding="unicode")
+        self.assertLess(len(lean),len(legacy))
+        for visibility in (False,True):
+            with self.subTest(expensive_visibility=visibility):
+                with patch.object(self.client,"source",return_value=legacy):
+                    before=self.phone.observe(expensive_visibility=visibility)
+                self.client.calls.clear()
+                with patch.object(self.client,"source",return_value=lean):
+                    after=self.phone.observe(expensive_visibility=visibility)
+                self.assertEqual(after["nodes"],before["nodes"])
+                self.assertEqual(after["total_nodes"],5)
+                self.assertEqual(after["app"],before["app"])
+                self.assertEqual(after["viewport"],before["viewport"])
+                self.assertFalse(after["truncated"])
+                self.assertEqual(after["nodes"][3],{
+                    "type":"TextField", "label":"搜索", "name":"bill-search",
+                    "value":"咖啡", "enabled":False, "rect":[60,310,250,44]})
+                expected="accessible" if visibility else "visible,accessible"
+                self.assertIn("/source?format=xml&excluded_attributes="+expected,self.paths())
+
     def test_node_keeps_each_fact_once(self):
         self.client.nodes = [
             node("返回", kind="Button", enabled=True),
@@ -371,10 +409,10 @@ class SourceRootTests(PhoneCase):
 
     def test_tree_observation_needs_one_request_once_the_viewport_is_known(self):
         first = self.phone.observe()
-        self.assertEqual(self.paths(), ["/source?format=xml&excluded_attributes=visible", "/window/size"])
+        self.assertEqual(self.paths(), ["/source?format=xml&excluded_attributes=visible,accessible", "/window/size"])
         self.client.calls.clear()
         second = self.phone.observe()
-        self.assertEqual(self.paths(), ["/source?format=xml&excluded_attributes=visible"])
+        self.assertEqual(self.paths(), ["/source?format=xml&excluded_attributes=visible,accessible"])
         self.assertEqual((second["app"], second["viewport"]), ("com.example.phone", first["viewport"]))
         self.client.calls.clear()
         result = self.phone.tap(selector={"label": "Target"}, observe="tree")
