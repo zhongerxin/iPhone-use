@@ -147,7 +147,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(responses[1]["result"], {})
         tools = responses[2]["result"]["tools"]
         names = [tool["name"] for tool in tools]
-        self.assertEqual(len(names), 19)
+        self.assertEqual(len(names), 20)
         self.assertEqual(len(names), len(set(names)))
         for name in ("pua_ready", "pua_setup", "pua_observe", "pua_tap", "pua_type_text", "pua_batch", "pua_collect_list", "pua_apps"):
             self.assertIn(name, names)
@@ -486,7 +486,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(second.call("pua_metrics", {}), {"session_id": "shared-session-123"})
         self.assertEqual(first_client.calls + second_client.calls, [])
         cache = Path(self.directory.name) / "session.json"
-        self.assertEqual(json.loads(cache.read_text()), {"url": first.base_url, "session_id": "shared-session-123"})
+        self.assertEqual(json.loads(cache.read_text()), {"url": first.base_url, "session_id": "shared-session-123", "midscene_revision": 0, "midscene_action_revision": 0})
         self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
 
     def test_locked_phone_blocks_mutations_before_semantic_lookup(self):

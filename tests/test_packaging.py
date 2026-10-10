@@ -35,6 +35,11 @@ class PackagingTests(unittest.TestCase):
         cls.stage = cls.root / 'dist/iphone-use'
         cls.archive = next((cls.root / 'dist').glob('*-source.zip'))
 
+    def test_midscene_lock_uses_public_registry(self):
+        lock=json.loads((ROOT/'server/midscene/package-lock.json').read_text())
+        for package in lock['packages'].values():
+            if 'resolved' in package:self.assertTrue(package['resolved'].startswith('https://registry.npmjs.org/'),package['resolved'])
+
     def test_source_and_install_exclude_local_material_without_deleting_it(self):
         with zipfile.ZipFile(self.archive) as archive:
             entries = {Path(name).relative_to('iphone-use').as_posix() for name in archive.namelist()}
@@ -93,7 +98,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(len(replies), 4)
         self.assertTrue(all('error' not in reply for reply in replies), str([r.get('error') for r in replies]))
         self.assertEqual(replies[0]['result']['serverInfo']['version'], version)
-        self.assertEqual(len(replies[1]['result']['tools']), 19)
+        self.assertEqual(len(replies[1]['result']['tools']), 20)
         uri = replies[2]['result']['resources'][0]['uri']
         read = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'resources/read', 'params': {'uri': uri}}) + '\n'
         process = subprocess.run([sys.executable, str(rebuilt / 'server/iphone_use.py')], input=read, capture_output=True, text=True, timeout=15, check=True)

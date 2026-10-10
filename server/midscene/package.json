@@ -1,0 +1,15 @@
+{
+  "name": "iphone-use-midscene",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@midscene/core": "1.13.4-beta-20261010095145.0",
+    "@midscene/ios": "1.13.4-beta-20261010095145.0",
+    "jose": "6.1.3",
+    "openai": "6.3.0",
+    "proper-lockfile": "4.1.2"
+  }
+}

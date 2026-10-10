@@ -23,11 +23,14 @@ from wda_setup import SetupManager, state_directory
 from wda_apps import AppCatalog
 from wda_screen import ScreenHub
 import wda_image
+import wda_midscene
+import wda_chatgpt
+import wda_mode
 from analytics import Analytics
 
 PUAError=WDAError
-VERSION="0.3.9"
-SCREEN_URI="ui://iphone-use/phone-0.3.9.html"
+VERSION="0.3.10"
+SCREEN_URI="ui://iphone-use/phone-0.3.10.html"
 # Codex scopes reuse to the host, chat, server and UI resource. A stable result
 # ID keeps repeated READY/open/pause/resume calls in that chat on one panel,
 # including after the MCP process reconnects; no device identifiers are needed.
@@ -92,6 +95,7 @@ BATCH_OPS=["tap","swipe","type_text","launch_app","press_button","wait","observe
 SCHEMAS["batch"]=obj({"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"oneOf":[obj({"op":{"type":"string","const":op},"args":SCHEMAS[op]},("op","args")) for op in BATCH_OPS]}}},("steps",))
 SCHEMAS["ready"]["examples"]=[{"recover":True,"screenshot":False}]
 SCHEMAS["screen"]=obj({"action":string("Default open displays the live iPhone sidebar. Pause before password/Face ID takeover; resume only after the user confirms completion.",enum=["open","pause","resume"])})
+SCHEMAS["midscene"]=obj({"action":string(enum=["settings","screenshot","tap","swipe","input","home","launch","record","act","assert","wait","auth_status","auth_login","auth_logout","auth_cancel","models"]),"mode":string(enum=["off","steps","ai"]),"planning":string(enum=["balanced","compact"]),"x":num(0,10000),"y":num(0,10000),"end_x":num(0,10000),"end_y":num(0,10000),"text":string(max_length=10000),"passed":BOOL,"timeout_ms":num(1000,60000,"integer"),"report_id":string(max_length=64)},("action",))
 SCHEMAS["screen_frame"]=obj({"after_seq":num(0,9007199254740991,"integer"),"last_event_id":num(0,9007199254740991,"integer")})
 SCHEMAS["screen_action"]=obj({"action":string("refresh reconnects the preview stream, home returns the iPhone to its Home screen, screenshot copies a native capture to the Mac clipboard.",enum=["refresh","home","screenshot"])},("action",))
 # Tools the preview App calls itself; the model never sees them.
@@ -104,7 +108,7 @@ DESCRIPTIONS={
  "find":"Query selector fields or a PUA predicate directly without a whole tree. Returns matches in tree order with index, type, texts and rect; this tool's selector documents the fields every selector accepts.",
  "tap":"Tap the element a selector resolves to after on-screen and hittable checks, or tap point coordinates with optional contextual observation_id. If the selector fails, the error returns a screenshot and tap points: tap by x/y in the next call instead of trying other selectors. Executes once optimistically; expect opts into a postcondition. Request tree/both if the next decision needs the new page.",
  "swipe":"One gesture; default verify=false/observe=none skips XML checks. verify=true checks geometry once; failure returns a screenshot even with none/tree, without another gesture. Inspect it before acting; no progress does not prove list completeness.",
- "type_text":"Enter the full intended Unicode text into an editable nonsecure field; no short-text trial or mandatory readback. Omit selector to type into the field that already has keyboard focus, which is how to continue after a selector failed: tap the field by x/y, then type. Send the whole text in one call: long text is typed in bounded requests, and a result with input_complete=false returns a continue_token to pass alone in the next call, after which verify/submit/expect/observe run. verify=true opts into exact readback before submit; expect opts into a page postcondition. Newlines need explicit intent; submit defaults false. Never replay uncertain input/submission.",
+ "type_text":"PUA fallback: enter full text in a nonsecure field. Omit selector for the focused field. On input_complete=false, pass only continue_token next; never replay input. verify=true checks exact text before submit; expect checks the page. Newlines need explicit intent; submit defaults false. See the skill for input/focus recovery.",
  "press_button":"Home uses the dedicated PUA homescreen endpoint once; default skips foreground polling. verify=true checks SpringBoard for Home, expect can check a page. Volume effects cannot be semantically verified.",
  "launch_app":"Activate once using a resolved bundle ID, optimistically by default. verify=true polls foreground up to five seconds; expect checks the intended page. Request observation for the next decision. Never blindly replay uncertain activation.",
  "wait":"Bounded semantic presence polling for expected target. Presence is a UI postcondition, not proof of business correctness.",
@@ -114,6 +118,7 @@ DESCRIPTIONS={
  "metrics":"In-process totals without text, app data or images: PUA HTTP time and bytes, tool time, response bytes per tool, and the wait between each response and the next tool request (host, model and user time). reset=true starts a new window."
 }
 DESCRIPTIONS["apps"]="Resolve a real bundle ID by installed-device inventory, bundled verified aliases, or Apple's Search API. Query app name before launch instead of guessing. Store metadata does not prove installation; check installed_verified and publisher/country."
+DESCRIPTIONS["midscene"]="Midscene off/steps/ai; read skill."
 READS={"doctor","observe","find","wait","metrics","apps"}
 READS.update(("screen","screen_frame"))
 DESCRIPTIONS["screen"]="Open or reuse the live iPhone screen in the Codex side panel. No phone actions or UI controls. Pause the preview before password/Face ID user takeover; resume after explicit completion. READY also opens or reuses this view by default."
@@ -129,8 +134,8 @@ def undocumented(value):
 
 # Every selector has the same fields. pua_find publishes their documentation once; other
 # tools publish the same closed shape with one line pointing there.
-SEL_BRIEF={**undocumented(SEL),"description":"Selector; fields as documented on pua_find.selector."}
-OBS_BRIEF={**undocumented(OBS),"description":"Post-action output for the next decision; default none."}
+SEL_BRIEF={**undocumented(SEL),"description":"Selector; see pua_find.selector."}
+OBS_BRIEF={**undocumented(OBS),"description":"Next-step output; default none."}
 
 
 def published_schema(name):
@@ -168,6 +173,7 @@ def published_schema(name):
 TOOLS=[{"name":"pua_"+name,"title":"Pua "+name.replace("_"," "),"description":DESCRIPTIONS[name],"inputSchema":published_schema(name),
         "annotations":{"readOnlyHint":name in READS,"destructiveHint":name not in READS,"idempotentHint":name in READS,"openWorldHint":name!="screen_frame"}} for name,schema in SCHEMAS.items()]
 for tool in TOOLS:
+    if tool["name"]=="pua_midscene":tool["annotations"]["openWorldHint"]=True
     if tool["name"] in ("pua_ready","pua_screen"):
         tool["_meta"]={"ui":{"resourceUri":SCREEN_URI}}
     if tool["name"]=="pua_screen":
@@ -268,6 +274,8 @@ class Runtime:
         self.base_url=base_url or os.environ.get("WDA_URL") or configured_url or "http://127.0.0.1:18100"
         self.client=WDAClient(self.base_url)
         self.phone=PhoneController(self.client,self.state_dir)
+        self._midscene_revision=0
+        self._midscene_action_revision=0
         self.setup_manager=SetupManager(self.state_dir,self.base_url)
         self.apps=AppCatalog(self.state_dir,self.setup_manager)
         self.screen=ScreenHub(self.state_dir)
@@ -301,6 +309,12 @@ class Runtime:
         # sharing this runtime, and share only this plugin's session identity.
         if not isinstance(name,str) or not name.startswith("pua_") or name[4:] not in SCHEMAS:raise WDAError("unknown_tool","Unknown PUA tool.")
         validate(args,SCHEMAS[name[4:]]);validate_semantics(name[4:],args)
+        if name=="pua_midscene" and args["action"]=="settings":
+            if set(args)-{"action","mode"}:raise WDAError("invalid_arguments","Settings accept only action and mode.")
+            return wda_mode.settings(self.state_dir,args.get("mode"))
+        if name=="pua_midscene" and args["action"] in wda_chatgpt.ACTIONS:
+            if set(args)!={"action"}:raise WDAError("invalid_arguments","Authorization actions accept only action.")
+            return wda_chatgpt.run(self.state_dir,args["action"])
         if name in ("pua_screen","pua_screen_frame","pua_screen_action"):self.identify_device()
         # Cached preview polling does not share the PUA action/session lock.
         if name=="pua_screen_frame":return self.screen.frame(**args)
@@ -317,11 +331,19 @@ class Runtime:
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:raise WDAError("device_busy","Another iPhone Use operation is running. Wait for it to finish before continuing; no action was executed.")
             try:
+                self.operation_lock_fd=lock.fileno()
                 if cache_path.is_file() and hasattr(self.client,"session_id"):
                     try:
                         cached=json.loads(cache_path.read_text())
                         sid=cached.get("session_id","")
-                        if cached.get("url")==self.base_url and isinstance(sid,str) and re.fullmatch(r"[A-Za-z0-9-]{1,128}",sid):self.client.session_id=sid
+                        if cached.get("url")==self.base_url and isinstance(sid,str) and re.fullmatch(r"[A-Za-z0-9-]{1,128}",sid):
+                            revision=cached.get("midscene_revision",0)
+                            action_revision=cached.get("midscene_action_revision",0)
+                            if any(type(value) is not int or value<0 for value in (revision,action_revision)):raise ValueError()
+                            if revision!=self._midscene_revision:self.client.reapply_settings()
+                            if action_revision!=self._midscene_action_revision:self.phone.external_action()
+                            self._midscene_revision,self._midscene_action_revision=revision,action_revision
+                            self.client.session_id=sid
                     except (ValueError,OSError,AttributeError):pass
                 return self._call(name,args)
             finally:
@@ -330,12 +352,13 @@ class Runtime:
                     task_temp=self.state_dir/("session-"+str(os.getpid())+".tmp")
                     try:
                         fd=os.open(task_temp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
-                        with os.fdopen(fd,"w") as stream:json.dump({"url":self.base_url,"session_id":sid},stream)
+                        with os.fdopen(fd,"w") as stream:json.dump({"url":self.base_url,"session_id":sid,"midscene_revision":self._midscene_revision,"midscene_action_revision":self._midscene_action_revision},stream)
                         os.replace(task_temp,cache_path)
                     finally:
                         if task_temp.exists():task_temp.unlink()
                 elif hasattr(self.client,"session_id") and cache_path.exists():cache_path.unlink()
                 fcntl.flock(lock,fcntl.LOCK_UN)
+                self.operation_lock_fd=None
 
     def identify_device(self):
         """Find the phone's model name for the preview header once, away from the request path."""
@@ -514,6 +537,7 @@ class Runtime:
                 if args.get("reset"):
                     self.client.clear_metrics();self.phone.tool_records.clear();self.responses.clear();self._replied_at=None
                 return result
+            if op=="midscene":return wda_midscene.run(self,**args)
             if op in ("tap","swipe","type_text","launch_app","press_button","batch","scroll_find","collect_list"):
                 if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself before operations; observe again afterward.")
             return getattr(self.phone,op)(**args)
@@ -605,12 +629,14 @@ def tool_result(runtime,params):
 
 INSTRUCTIONS=(
  "PUA means Phone Use Agent; all iPhone Use tools use the pua_ prefix. "
+ "Read pua_midscene settings once per task: off uses PUA; steps (default) uses Midscene explicit actions; ai uses act/assert/wait with separate consent. Recommend AI when useful; change mode on acceptance, not auth status. Read skill; reuse report_id. "
  "Read iphone-use-setup before setup and iphone-use for tasks. First phone use in this chat: pua_setup(action=status) before any READY; reuse a ready service or active job, otherwise start once with the existing build. start waits up to 20 seconds; pending jobs use status(job_id, wait_seconds=20), then pua_ready(recover=true, screenshot=false); only ready=true permits phone tasks, then reuse READY's observation and the healthy channel. "
  "If READY fails with pua_unreachable/not_ready, continue initialization rather than end the task: pua_setup(action=status), reuse an active start/recovery job or start once from the existing config/build, poll that job until service.ready=true, then READY again. Missing config/source/build uses the setup skill. "
  "recover=true is runtime recovery, not cold startup; for state=recovering follow its setup job until the service is ready, then READY again. Honor explicit diagnostic/no-start/no-restart instructions. "
  "The live iPhone screen opens or reuses the same side panel with READY; setup/recovery and preview pause/resume keep the existing panel. Use pua_screen to reopen a closed panel, not to refresh an already open one. Opening it does not prove readiness or require an extra user confirmation, and widget frames never substitute for a model observation or final verification. "
  "Results are one compact JSON text. Tree nodes give type without the XCUIElementType prefix and rect=[x,y,width,height] in iPhone points; an omitted name equals label, an omitted value repeats the text, omitted enabled/visible/in_viewport are true. A listed node is not proven hittable: fixed headers and overlays can cover it. "
  "A screenshot arrives as an image in the same result; through functions.exec forward each image block with image(block) and text blocks with text(block.text), never text(the whole result) or base64. If image forwarding is unavailable, use view_image on image.path or error.observation.image.path. It is scaled for reading: image pixels x image.pixel_to_point [x,y] = iPhone points. Standalone observation uses mode, mutation output uses observe. "
+ "The following selector/batch/observe hints apply to off mode and explicit PUA fallback. "
  "Selectors copy label/name/value/type from fresh nodes; use label_contains for long or changing labels. Matches nested at one place, or with only one on screen, resolve by themselves. "
  "Screenshot inspection is the fallback for abnormal UI state: selector/focus failure, unresolved scroll search, no scroll progress, changed/blocked scroll context, input mismatch or a failed page expectation. Inspect the attached screenshot FIRST before any further mutation; if no usable image is attached take one pua_observe(mode=screenshot). Decide from visible state whether to stop, handle a popup, change the region/direction, tap by x/y or continue missing work. scroll_find never chains another swipe after an unresolved post-scroll query. tap_point/candidates locate elements but do not prove they are unobstructed; close a visible popup before tapping a covered background target. For input tap the visible editable field, then type_text with text and no selector. If a coordinate tap or focus failed, choose a new target from a fresh screenshot rather than repeat the same point or hand routine UI trouble to the user. Do not try other selector spellings or read the tree again first. Correct schema/channel/authentication errors by their own recovery; never blindly replay uncertain actions. Resolve unknown bundle IDs with pua_apps. "
  "Execute routine actions optimistically: observe=none and verify=false are defaults, verified=false/verification_deferred=true is normal and does not require a separate verification call. If the next decision needs the resulting page, request observe=tree/both in the action and inspect previous success while planning that next step. "

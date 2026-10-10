@@ -1,21 +1,45 @@
 ---
 name: iphone-use
-description: 通过 PUA（Phone Use Agent）MCP 工具高效操作真实 iPhone；本对话首次使用先直接 setup 检查并启动服务，再取得 READY，服务未启动时沿 setup 启动流程继续。默认乐观执行导航、点击、输入和滚动，在下一步观察时顺带判断进度，只对关键最终结果显式验收；指导 App 查找、列表采集、手机屏幕侧边栏及密码或 Face ID 认证接管。
+description: 操作真实 iPhone，默认开启 Midscene 单步动作与报告，不调用内部 AI；可关闭回到 PUA，或另行开启 ChatGPT 授权的 AI 自动执行。支持持久开关、初始化、实时屏幕及认证接管。
 ---
 
-# 用 PUA 完成 iPhone 任务
+# 完成 iPhone 任务
 
-新对话没有本对话的有效 READY 证明时，先执行下面的初始化流程，再开始手机任务；此前聊天成功、安装了插件、打开 widget 或看到 Runner 图标都不替代本对话 READY。PUA 服务尚未启动是需要继续处理的启动步骤，不能据此提前结束用户任务。已有配置默认复用，只启动缺失服务，不整套重装。
+每个任务先调用一次 `pua_midscene(action="settings")` 读取持久模式，不需要设备连接、Node 或授权。AI 主动判断是否值得推荐高级功能，不等用户知道功能名称后再来询问；用户接受建议、已有明确偏好或直接要求时，附加 `mode` 切换。
 
-先确定用户要交付的结果和完成条件。默认把一次正常返回的动作当作已按计划执行，继续准备下一步；不要为每次点击、切页、Home、启动或输入专门调用观察来证明成功。下一步需要页面信息时，读取一次并顺带判断上一步是否生效；明确未生效再调整或重做。最终关键操作、发送或提交结果、关键文本以及交付文件需要有实际结果证据。
+面向用户只解释“Midscene 开关”和高级选项“AI 自动执行”，不要求用户选择三个技术模式。以下值仅用于工具路由。
 
-工具的 `ok`、`verified`、`complete` 及宿主的 completed 只描述对应调用，不代表整个任务完成。`action_complete` 表示该命令处理完毕，不是业务结果已验收。正常返回的 `verified=false` 表示没有单独验收，不是失败，也不要求停下。按已知路径继续，直到全部完成条件满足、关键结果已核对并完成交付；不能用“接下来读取……”提前结束。较长任务持续给出简短进度。
+- `off`：使用 [PUA 操作](references/pua-fallback.md)，不查授权，不生成 Midscene 报告。
+- `steps`（默认）：当前聊天模型看图决策，Midscene 执行明确动作并记录报告；即使已授权，也不使用 act/assert。
+- `ai`：读取 [操作与授权](references/midscene.md)，检查 auth_status，授权后使用 act/assert/wait。未授权时说明单独授权和额外用量，由用户在官方页面完成；不复制宿主凭据。
+
+“开启 Midscene”选 steps；“开启 AI 自动执行”选 ai；“关闭 AI 自动执行”选 steps；“关闭 Midscene”选 off。授权与模式独立，登录不改变模式；关闭保留登录和报告。新安装或升级未设置偏好时使用 steps，不从授权推断开启 AI；已保存的 off 或 ai 保持不变。正在执行时等待完成再切换，不重放不确定动作。
+
+## 主动判断与渐进引导
+
+在理解任务后，以及拿到新的页面证据后，判断 AI 自动执行是否有明确收益。不要仅因已登录、任务中出现“点击”或操作失败就建议开启。
+
+| 任务证据 | 应采取的引导 |
+|---|---|
+| 单次点击、打开 App、读取当前页面，或下一步已明确 | 直接用默认单步模式完成，不插入升级问题 |
+| 目标明确、完成条件可观察，需要跨页面连续导航，并根据中间页面作判断 | 主动推荐 AI 自动执行，说明本任务可由它按页面变化规划后续步骤 |
+| 用户要求验证多个可见条件，或需要可回放的独立视觉断言证据 | 主动推荐 AI 视觉核验，说明真正的 aiAssert 会额外调用模型，不能保证判断无误 |
+| 用户复盘、排查已完成的操作 | 直接提供默认生成的报告和截图；不把看报告包装成需要 AI 授权的能力 |
+| 断连、PUA 服务失败、设备锁屏、App 登录、结果不确定 | 先恢复连接、交还认证或观察现状；不能把启用 AI 当成修复方式，不能重做不确定操作 |
+
+推荐必须联系当前任务，使用一句收益加一句成本说明。例如：“这次需要跨几个页面寻找目标并核验结果，建议试用 AI 自动执行，让它按页面变化规划下一步，并留下可回放的检查记录。这会额外调用授权账号的模型，首次需要 ChatGPT 授权。”再通过宿主提问工具提供“本次试用（推荐）／保持当前方式／以后默认使用”的选择。没有宿主提问工具时直接简短询问。不要要求用户先提出开启，不承诺更快、更省或必然成功。
+
+一项任务最多主动推荐一次。用户拒绝后继续当前方式，不追问；已知用户明确关闭、不希望推荐或拒绝 AI 时尊重偏好。已有 ai 偏好且授权有效时直接使用，不重复推荐或授权。等待可选建议答复时可继续不依赖 AI 的已授权工作；未答复不算同意，保持当前模式。
+
+接受“本次试用”后保存原模式、切换 ai，检查授权；缺少授权才打开官方流程。先做一个边界清晰的子任务，再用截图和断言检验结果，沿用同一 report_id。报告如实区分成功、失败和未完成，不把用户接受建议当成验证成功。任务后恢复原模式，并给出可供用户评估的报告；不再自动追加一次推广询问。“以后默认使用”才持久保存 ai 偏好。授权失败或取消时恢复原模式，说明情况，再按最新页面继续，绝不重放不确定动作。
+
+用户明确要求“仅这次”时，保存原模式，临时切换；任务成功、失败或取消后恢复原模式。中断后发现未恢复时，先告知并恢复。普通切换持久保存。
 
 ## READY 与认证
 
-正常任务在本对话首次使用手机时，先直接调用 `pua_setup(action="status")`，按 [启动与恢复](references/startup.md) 复用健康服务或活动工作，缺少服务才 start 一次；服务就绪后调用 `pua_ready(recover=true, screenshot=false)`，不要先等 READY 失败才 setup；文字任务保留 status / session / tree / viewport / 解锁检查，无需额外截图。已有本对话 READY 且通道未失效则直接复用，不为每步重验。`recover=false` 仅用于用户明确禁止重启或明确要求只读诊断，不能因谨慎主动设置或自动覆盖用户限制。
+本对话首次使用先调用 `pua_setup(action="status")`，复用已就绪服务或活动工作；缺少服务时按已有配置启动一次。start 最多等待 20 秒，未就绪时用 `status(job_id, wait_seconds=20)` 继续查询，随后调用 `pua_ready(recover=true, screenshot=false)`。只有 ready=true 才能执行手机任务；已健康初始化的通道直接复用。尊重用户明确的禁止启动或重启指令。
 
-- `ready=true, state="ready"`：通道已可用。直接复用 READY 中的 `observation` 准备下一步，不立即重复 observe，也不再加一轮 doctor、观察或导航预检。
+- `ready=true, state="ready"`：通道已可用。off 复用 READY 观察；steps 取一次 Midscene screenshot；ai 按任务调用 act/assert/wait。不额外调用 doctor。
 - `ready=false, state="recovering"` 或 `state="recovery_required"`：没有 error、MCP isError=false，仍不表示手机可操作。按 [启动与恢复](references/startup.md) 查询同一工作或按用户限制处理。
 - READY 返回 `pua_unreachable`、连接拒绝、`not_ready` 或明确服务未启动：这是启动分支，不是整个任务失败。`recover=true` 不会自动冷启动；调用 `pua_setup(action="status")`，复用活动中的 start / recover 工作，或在已配置且没有活动工作时 start 一次，服务就绪后重验 READY。逐步做法见 [启动与恢复](references/startup.md)，缺少配置 / 源码 / 构建时读取 `iphone-use-setup`。
 
@@ -25,78 +49,24 @@ READY 关联手机屏幕侧边栏，宿主支持时默认打开或复用本聊�
 
 App 实际要求密码、PIN、验证码、Face ID / Touch ID，或手机需要用户解锁时，按 [认证接管与恢复](references/authentication.md) 等用户完成。App 认证先 `pua_screen(action="pause")`；`phone_locked` 已自动暂停为 `device_locked`，不要再用显式 pause 覆盖原因。必须调用宿主提问工具（Default 优先 `functions.request_user_input_async`），首个选项固定「已完成继续」，第二个可为「暂时无法完成」。异步返回 / 预选不是用户答复；接管期间暂停手机动作、读取和截图，不索取凭据。实际完成通知后，App 认证或旧版未知暂停先 `pua_screen(action="resume")` 再取新观察；设备解锁则重验 READY，成功时仅自动解除同一次锁屏暂停。READY 的 `preview.paused` / `pause_reason` 说明预览状态；不能把 READY 成功当成 App 认证已完成。根据新状态继续剩余工作。
 
-## 按下一步需要选择观察
+## Midscene 执行与报告（仅 steps / ai）
 
-已知唯一语义目标和已知导航路径使用默认 `observe="none"`，可以连续执行或合并为 batch。下一步需要辨认未知页面、选区域或读取内容时，在本次动作直接设置 `observe="tree" / "screenshot" / "both"`，用返回的嵌套 `observation` 同时规划下一步和顺带判断上一动作。不要先用 none，再专门 observe 作验证而增加一个模型回合。独立读取用 `pua_observe(mode=...)`，不要混用 mode 与 observe。
+ai 模式且已授权时，在 READY 后用 `act, text="具体任务、约束和可观察的完成条件"` 执行；保持同一 report_id。所有 act 任务默认使用 SDK fast 与简短执行记忆；省略 planning 即可，也可显式传 `planning="compact"`。不按任务类型自动改用 balanced；仅在用户明确指定或对照测试时传 `planning="balanced"`。不向用户新增配置问题；失败后先观察现状，不切换规划后重放整个任务。优先复用返回的 `completion.summary`、`image` 和 `report`：说明覆盖完成条件且与返回截图一致时，直接汇报，不再固定调用 screenshot、observe 或 assert。说明为空、只说“完成”、缺少关键条件、与截图冲突或工具失败时，才针对缺口补查；不重放整个任务。用户明确要求独立视觉断言时仍使用 assert。completion 是执行模型的判断，不能称为独立 aiAssert。aiAct 内的输入可用 replace（替换）、clear（清空，value 为空）和 typeOnly（追加），只改任务要求的字段，不自动提交。若任务明确要等待异步页面条件，在已授权的 ai 模式中调用 `action="wait", text="可观察条件", timeout_ms=15000`，沿用同一 report_id；它调用真正的 aiWaitFor，会额外请求模型，不给每步固定追加等待。超时仅表示未在预算内确认条件。以下单步规则仅用于 steps 模式。
 
-树的每个节点只保留一份事实：`type` 不带 `XCUIElementType` 前缀，`rect` 是 `[x, y, width, height]`（iPhone 点）；没有 `name` 表示它与 `label` 相同，没有 `value` 表示它与文字相同，没有 `enabled` / `visible` / `in_viewport` 表示为 true。保持 `include_invisible=false`、`max_nodes=200`、`expensive_visibility=false`；只查一个目标用 `pua_find` / `pua_wait`，不重复获取整树。树截断或节点在视口内不能证明内容全量或目标未被遮挡，固定表头和浮层可能盖住它。
+READY 后读取 [Midscene 操作参数](references/midscene.md)。先调用 `pua_midscene(action="screenshot")`，保存返回的 `report_id`。同一任务后续每次调用都传这个 ID，新任务使用新 ID。每次只执行一个动作，查看返回截图后再决定下一步。查询页面和断言由当前聊天模型根据截图完成；最终使用 `action="record", text="实际观察及结论", passed=true/false` 记录验收。不得为了得到成功报告而将未确认的结果记为通过。
 
-自绘内容、遮挡或缺失标签需要视觉判断时才取截图。截图随同一结果以图片返回，已缩放到适合阅读的尺寸：图像像素乘以 `image.pixel_to_point` 的 `[x, y]` 得到 iPhone 点，不要按原始分辨率或 Mac 屏幕换算。screenshot 跳过 XML；both 同时提供树和图。若 App 出现分享浮层，处理当前状态，不循环重复同一路径截图。
+PUA 回退的普通观察默认返回最多 200 个过滤后节点，max_nodes 可显式设置，最大 500；树被截断时按需查看截图或缩小查询范围。
 
-## 界面异常时先看截图，再决定操作
+坐标使用 iPhone 点：截图像素乘以返回的 `image.pixel_to_point`，不能直接使用 Mac widget 坐标。搜索栏、标签栏或键盘后可见的文字可能被遮挡，先滑动到无遮挡区域再点；页面未变化时重新观察，不反复点击同一位置。输入仅追加单行文本，不清空、不自动提交；需要替换时先通过可见控件处理原内容。发送、购买等有外部影响的操作仍需用户任务授权，不能把输入成功当成提交成功。
 
-截图是界面异常的通用兜底。selector / 焦点失败、滚动后仍找不到可点击目标、滚动无进展、区域被遮挡或上下文改变、输入回读不符、预期页面没出现时，先查看结果里的当前截图，再决定下一次操作；没有可用截图时取一次 `pua_observe(mode="screenshot")`。不要先重读整树、换标签写法、增加滚动次数或原样重试。树被截断、坐标点击后明显没生效、页面与预期不一致时也按此流程处理。普通 `verified=false` 仍不是异常，不要求每步截图。
+`ok` 或 `action_complete` 只表示单次操作完成。完整任务需要确认最终页面和实际结果。失败先查看返回的最新截图，缺失时取一次新的 `screenshot`；不因超时重放动作。用户完成认证后从实际状态继续，不能重放整个任务。steps 报告记录宿主决策，不代表独立 AI 验收；ai 模式的 assert 才是真正的 SDK AI 断言。
 
-截图先判断当前页面、首尾行是否移动、末尾控件 / 空白、弹窗 / 固定表头和实际可滚动区域。已见目标或任务范围边界就停止寻找；画面不再移动先处理边界或遮挡，再决定是否需要另一区域或方向。`direction` 始终是手指移动方向，up 通常查看下面的内容。用户侧栏的实时预览不替代模型实际查看工具图片。
+最终说明完成结果和未完成项，给出 `report_id` 与 HTML `report` 路径。多个独立进程的记录可累积到同一报告；普通 PUA 调用不计入该报告。保持简短进度，完成所有已授权步骤后再结束。
 
-- 点击：`tap_point`、candidates 的 `tap` 是元素位置（iPhone 点），不证明它可点击。优惠券、广告、菜单或登录浮层可能盖住后台控件；先从截图找到实际可见的关闭 / 取消按钮，处理遮挡，再点目标。
-- 输入：先点截图中实际可见的输入框，再调用不带 selector 的 `pua_type_text(text=...)`。`no_focused_field` 表示没有输入；上一个点击可能被浮层拦截或落在错误位置，不能原样重复那组坐标和输入。按当前截图重新选点，下一步需要信息时让动作返回截图，以便判断页面与焦点。
-- 目标在屏幕外：先向目标滑动，再按随后截图点击。等待标签或滚动查找失败也按真实画面继续，不循环相同标签。
+需要把手机文件传回 Mac 时，参照 [AirDrop 文件传回 Mac](references/airdrop.md)。
 
-截图像素点 `(px, py)` 换算为 `x=px*image.pixel_to_point[0]`、`y=py*image.pixel_to_point[1]` 后传给 `pua_tap`。x/y 接受 iPhone 点，不能直接传截图像素或 Mac widget 坐标。
+## 安装、连接和回退
 
-通过 `functions.exec` 调工具时必须把图片真正转发给模型，不能 `text(result)` 输出整份含 base64 的结果：
+`pua_ready`、`pua_setup`、`pua_apps`、`pua_screen` 继续负责连接、安装、查找 App 和预览，不参与动作规划。未知 bundle ID 用 `pua_apps` 查询，不能猜测。SDK 缺失时按指南安装，无需模型密钥。预览说明见 [屏幕通道](references/screen.md)。
 
-```javascript
-const result = await tools.mcp__iphone_use__pua_observe({mode: "screenshot"});
-for (const block of result.content ?? []) {
-  if (block.type === "text") text(block.text);
-  else if (block.type === "image") image(block);
-}
-```
-
-点击、输入等失败结果同样转发图片块。如果图片没转发成功，用 `view_image` 打开返回的 `image.path` / `error.observation.image.path`；不能把图片元数据或 base64 当成看过截图。
-
-以上用于可恢复的界面定位问题。参数错误按 schema 修正，通道故障恢复 READY，锁屏 / 认证等用户完成。动作是否生效不确定时先读真实状态，不能重放输入、发送、下单或整个批次；截图足以处理的常规遮挡应继续尝试，不提前把任务交还用户。
-
-## App 与常规动作
-
-需要把手机中的图片、视频或其他文件传回 Mac 使用时，参照 [AirDrop 文件传回 Mac](references/airdrop.md)，发送后到下载目录找到文件即可使用。
-
-已知并核验过的 bundle ID 可直接 launch；需要离线查常用 App 时用 `pua_apps(source="catalog", query=...)` 或 [常用 App 目录](references/apps.md)。未知或同名 App 用 `source="auto"` 查本机候选，仍无结果才查 Apple。不要连续猜 ID；招商银行主应用为 `com.cmbchina.MPBBank`。商店或目录记录不证明本机安装，`installed_verified=true` 才是安装证据。启动后准备下一步的观察会同时显示实际前台，不额外增加默认前台验收。
-
-- `pua_launch_app`：激活一次后继续；默认 `verify=false, observe="none"`。下一步需要新页面信息时设置 observe；关键入口确需证明目标 App / 页面时显式 `verify=true` 或传 `expect`。
-- `pua_tap`：优先使用 `selector`，从当前节点照抄 label / name / value / type，可加 enabled；标签很长或含会变化的时间、数字时用 `label_contains`。predicate 单独使用，保留实际标签里的换行、引号和反斜线；rect、visible、in_viewport 不是 selector 字段。同名匹配叠在同一位置（如 Cell 与其中的文字），或只有一个在屏幕内时，工具自行取该目标并在结果的 `target` 中说明；多个分开的匹配返回 `ambiguous_target` 和带 `index`、类型、位置、`tap` 坐标、`hittable` 的 candidates，按其中目标的 `tap` 坐标点击（或用同一 selector 加 `index`），不随意选第一项，也不必为此再观察。selector 失败或语义不足时用 iPhone 点坐标 x/y；observation_id 可选，提供时必须来自同一 Runtime，并仅核对 App / 视口上下文。已有页面信息足以定位时不额外读树或截图；切页、用户接管或旋转后按当前信息重新定位。
-- `pua_press_button`：仅用 schema 中支持的按钮。Home 使用专用 homescreen 路径，默认 `verify=false`，正常返回即可准备下一步；明确需要主屏状态时显式 `verify=true`。MCP 绑定不可用时按 [工具故障与代码调用](references/tool-fallback.md) 继续同一已授权动作。
-- `pua_swipe`：方向为手指移动方向，up 通常浏览后续内容。默认 `verify=false, observe="none"`，只执行一次手势，不读取 XML 验进展。可按已知列表传 region，不强制 observation_id 或 tree。下一步读取列表内容时顺带判断是否移动；明确没动先看截图中的入口、边界、浮层或区域。显式 `verify=true` 只检查一次手势的几何变化；无进展或上下文变化即附截图交回模型，即使传入旧参数 `max_attempts=2` 也不自动换手势重试。
-- `pua_wait`：确实依赖控件出现时使用有界 timeout；无需固定长 sleep，也不为所有导航补一个 wait。`pua_scroll_find`：目标已可点击就直接返回；遮挡或歧义立刻附截图停止。一次调用最多滑一次，滚动后仍找不到可点击目标时先查看返回截图，再判断是否继续滑；`max_swipes=0` 只查找，正数即使大于 1 也不连续盲滑。找到后继续下一步，不再次重复查找同一结果。
-
-`expect` 和 `verify=true` 是显式验收选项，用于最终关键状态或实际依赖，不是每步必填。HTTP accepted 与业务成功是不同事实；常规任务乐观继续，最终结论只依据关键结果。明确 error、输入 / 提交 uncertain 或动作部分完成时先查看实际状态，再决定剩余步骤。
-
-## 输入与发送
-
-直接用 `pua_type_text(selector, text)` 一次给出用户需要的完整内容，不先写测试短文本或 ASCII，也不自行拆段。selector 找不到输入框时不换写法重试：用坐标点中输入框，再调用不带 selector 的 `pua_type_text(text=...)` 向当前焦点输入。默认 `replace=true, allow_newlines=false, submit=false, verify=false, observe="none"`；普通搜索、筛选等输入后可接着做下一步，未知下一页面时在本次动作返回观察并顺带判断。需要保留已有草稿时按当前内容决定替换或追加；关键最终文本可显式 `verify=true` 核对完整字段。密码、手机解锁码和验证码由用户输入。
-
-长文本由工具分段输入。结果为 `input_complete=false` 时文本还没输完：只带返回的 `continue_token` 再调用一次 `pua_type_text`，不重发文本、不附其他参数，期间不要点击、滑动或切页；全部输完后原调用里的 verify / submit / expect / observe 才执行。续传失效（`input_continuation_expired`）时不会输入任何内容，先读取字段的实际文字，再用 `replace=false` 只补缺少的部分。输入中途报错附带 `characters_confirmed`，同样先回读，不整段重输。
-
-多行内容可能在聊天控件里触发 Return 发送。只有确知当前 TextView 是合适的多行编辑器时才设置 `allow_newlines=true`；不能暗中把用户要求的格式改成单行。允许换行不等于授权发送。用户已授权发送时，在发送前的一次观察或显式输入验收中核对目标会话和完整草稿，再发送一次；发送后核对最终内容和发送次数。`submit=true` 不证明提交结果，提交后以真实结果页 / 记录验收。明确未发送才补做，不根据 timeout、未单独验证或普通 `verified=false` 自动重发。
-
-微信聊天消息尽量整理成不含换行的单条文本，再一次输入并发送，避免聊天框把回车解释为发送。确实需要多行排版时，不要把含 `\n` 的整段文本直接交给 `pua_type_text`：先把内容输入为草稿并确认焦点在微信输入框，在输入框内空白处点一下调出文本编辑 toolbar，再点击 toolbar 中的「换行」来插入换行；按需重复，完成后核对完整草稿，再单独点击一次「发送」。toolbar 未出现或没有「换行」选项时，停止并根据当前界面重新定位，不用键盘 Return 代替。此操作依赖微信当前版本和输入框实际显示的 toolbar；不能仅凭 `allow_newlines=true` 推断换行已安全插入。
-
-## 连贯执行与列表采集
-
-用 `pua_batch` 合并已知短路径，最多 20 步；常规 tap、launch、Home、输入和滚动无需 expect，普通 `verified=false` 不阻断后续步骤。可以在计划末尾放一次 observe，或只在下一步需要信息的位置观察。明确错误、不确定动作或未验收的 submit 会停止；长文本未输完（`stop_reason="input_continues"`）或达到单次调用时间预算（`"time_budget"`）也会停止。按 completed_steps / stopped_at 和每步结果继续剩余步骤，不重放整个批次。未知页面、认证及动态弹窗需要新信息时再分段，不把未授权发送混入导航。
-
-寻找未知位置的记录时，不预先把多次同方向 swipe 塞进 batch。先滑一步并读取下一步需要的页面；树截断看不见末尾或页面没有进展时取截图，再判断是否继续。已知短路径仍可合并，任务范围或列表末尾已出现就停止滚动。
-
-`pua_collect_list(row_type="Cell", max_pages=6)` 有界采集最多 10 页，每次只滑一次并直接采集新页，复用完整树和 viewport；按目标行判断重复页，不因虚拟化列表标签全换而丢弃新页，也不额外尝试备用手势。返回 rows、pages、stop_reason，complete 始终为 false；相同 type/name/label/value 会去重，实际相同显示的记录可能被折叠。可传 end_selector 作为覆盖证据，最终按用户要求核对范围、条数、总额、日期和缺失字段；达到上限或无进展不能认定已全量。详情字段不足时进入详情读取，不要求每次进入详情都另验一次。具体关键验收见 [采集与输入验收](references/verification.md)。
-
-## 明确异常时调整
-
-`occluded_target` 在 click 前失败，没有发出点击，也不能推断失败点击打开了浮层。看错误附带的截图：目标可见就直接按 `tap_point` 用坐标点击；确有浮层、选择器或固定表头盖住时先处理它（真实关闭入口或面板外可安全关闭的位置），再继续。`offscreen_target` 先把目标滑入屏幕。自定义半屏面板可能没有原生 Alert / Sheet 节点，以截图为准，不根据背景树仍有按钮就认为无遮挡。
-
-显式滚动验证返回 `no_scroll_progress` 只表示已执行手势但没有证明列表移动，不证明空列表或到底。该异常及 `scroll_context_changed`、区域被浮层阻挡都会附截图，即使请求 `observe="none" / "tree"`；已有结果截图直接复用。列表采集因重复页停止也附截图，保留已采集行和覆盖限制。先看画面再处理边界、浮层或区域，不盲目增加次数；普通手势仍不为验证而额外读树。
-
-`action_executed=true, action_complete=false` 或 `uncertain=true` 表示动作或部分步骤可能已生效；输入、发送、支付、下单等先读实际内容 / 记录，不能重放整项操作。纯查询的短暂失效可由工具有界重读，它不等同于执行了手机动作。`local.pid.0`、`pua_foreground_unavailable` 或 XCTest Code 41 是通道故障，按 READY 指引恢复，复用新观察继续剩余任务；服务恢复不重放业务动作。
-
-工具绑定故障时可用插件的代码入口，复用同一配置、会话和操作锁；不因 MCP 不可用就放弃，也不另建并行控制会话。`pua_metrics` 给出 HTTP 与工具耗时、每个工具返回的字节数，以及两次工具调用之间的等待（宿主、模型与用户时间之和）；优化结果以实际任务耗时和交付完整度衡量，不把省略每步验收说成业务已被证明。
+off 模式直接使用 [PUA 操作](references/pua-fallback.md)。其他模式下，用户指定 PUA 或 Midscene 不支持所需操作时，说明原因再回退。不要静默切换，也不要在不确定动作后换工具重做。工具绑定不可用时按 [工具故障与代码调用](references/tool-fallback.md) 调用当前模式对应入口，保留设备锁和报告 ID。

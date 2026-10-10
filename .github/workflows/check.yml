@@ -12,6 +12,7 @@ jobs:
         with:
           node-version: '24'
       - run: npm ci --prefix ui --no-audit --no-fund
+      - run: npm ci --prefix server/midscene --no-audit --no-fund
       - run: npm run build --prefix ui
       - run: git diff --exit-code -- assets/phone-screen.html
       - run: sh scripts/check.sh

@@ -48,7 +48,7 @@ A reconnect may be required to load newly installed tools. Apple account login, 
 | An Apple account and development team available in Xcode | Sign the on-device WDA Runner |
 | A real iPhone connected over USB | Trust the Mac, enable Developer Mode when required, and keep it unlocked during installation / startup |
 | Python 3.9+ | Run the MCP server using Python's standard library |
-| Node.js 20.19+, 22.12+, or 24+; npm 10+ | USB forwarding and screen streaming; see the project engines and doctor checks |
+| Node.js 22.19+; npm 10+ (Node.js 24 recommended) | Midscene SDK, USB forwarding, and screen streaming |
 
 Xcode must support the phone's iOS version. No jailbreak or separate Appium Server is required. Setup uses a verified, pinned WDA 16.14.0 commit and manages downloads, dependencies, signing, and builds locally.
 
@@ -125,7 +125,13 @@ These changes reduce duplicate requests and model round trips. Overall task spee
 
 ## Tools
 
-There are 17 model tools and 2 additional widget-only tools.
+There are 18 model tools and 2 additional widget-only tools.
+
+The **Midscene switch** defaults to on (steps), providing explicit actions and reports without internal AI calls. **AI automation** defaults to off and is a separate advanced option. The three internal mode values are not three switches. Ask "Enable Midscene" for **steps**: replayable reports without additional internal model calls. Ask "Enable Midscene AI" for **ai**: real aiAct/aiAssert, requiring separate ChatGPT consent and model usage. "Disable Midscene" returns to off. Read/change the persistent preference with `pua_midscene(action="settings")`, optionally adding `mode="off"`, `"steps"` or `"ai"`. Signing in never changes the mode; disabling retains authorization and existing reports. Installation still includes SDK support.
+
+The assistant proactively identifies bounded multi-page tasks or meaningful visual checks and recommends AI with a concrete benefit and usage disclosure. Users can try it for this task, keep the current approach, or make AI their default. Simple operations proceed without an upgrade prompt; connection problems are resolved directly. A declined suggestion is not repeated within the task. A requested one-task trial restores the previous mode afterward. Neither speed nor lower usage is guaranteed.
+
+`pua_midscene` controls the phone through Midscene and accumulates reports by `report_id`. After `auth_login` and user consent on OpenAI's official page, `act` / `assert` call real aiAct / aiAssert using authorized ChatGPT plan usage, without an API key. The model comes from the account's catalog; it does not inherit the current chat's model or history. Explicit host-driven actions remain available without sign-in. Both modes reuse the WDA session and operation lock. See the [Midscene integration guide](skills/iphone-use/references/midscene.md).
 
 | Tools | Purpose |
 | --- | --- |
@@ -136,6 +142,7 @@ There are 17 model tools and 2 additional widget-only tools.
 | `pua_type_text`, `pua_wait` | Unicode input and bounded waits |
 | `pua_batch`, `pua_scroll_find`, `pua_collect_list` | Compound actions, search, collection |
 | `pua_screen`, `pua_metrics` | Preview controls and bounded timing statistics |
+| `pua_midscene` | Execution preference, optional Midscene actions and reports |
 
 Abnormal UI states return a screenshot for the model to inspect before choosing another action. Scroll search performs at most one swipe per call and stops if the target remains unreachable; occlusion, unproven scroll progress, input mismatch, and failed page expectations use the same fallback. Existing screenshots are reused, without automatic extra gestures or action replay.
 
@@ -172,3 +179,7 @@ This project relies on the [Appium](https://github.com/appium/appium) ecosystem 
 Thanks to the maintainers and contributors of Appium, WebDriverAgent, and related projects for making real iPhone automation possible.
 
 MIT License. See [third-party notices](THIRD_PARTY_NOTICES.md).
+
+In authorized AI mode, `pua_midscene(action="wait", text="Visible condition", timeout_ms=15000)` uses real `aiWaitFor` and appends to the same report ID. Use it only for asynchronous state; each check invokes the model. aiAct can choose single-line replace, clear, or append input without implicit submission. Default step mode and Scroll parameters are unchanged.
+
+This trial pins Midscene `1.13.4-beta-20261010095145.0`, including input readiness, touch scrolling, and fast-planning improvements. Installation uses the public npm registry.
