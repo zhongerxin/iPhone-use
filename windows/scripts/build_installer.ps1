@@ -23,11 +23,14 @@ $env:LIBCLANG_PATH = $LibClangDir
 $env:CC = Join-Path $NativeBin 'gcc.exe'
 $env:CXX = Join-Path $NativeBin 'g++.exe'
 $compatHeader = Join-Path $projectRoot 'installer\mingw-msvc-integer-compat.h'
-$env:CXXFLAGS = '-include "' + $compatHeader.Replace('\', '/') + '"'
+$env:CC_SHELL_ESCAPED_FLAGS = '1'
+$env:CXXFLAGS = ($env:CXXFLAGS + ' -include "' + $compatHeader.Replace('\', '/') + '"').Trim()
 Push-Location (Join-Path $projectRoot 'installer')
 try {
-    & $cargoPath build --release --locked
-    if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+    $runtimeDirectory = Join-Path $projectRoot 'runtime'
+    New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
+    $buildProcess = Start-Process -FilePath $cargoPath -WorkingDirectory (Get-Location).Path -ArgumentList @('build','--release','--locked') -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput (Join-Path $runtimeDirectory 'build.stdout.log') -RedirectStandardError (Join-Path $runtimeDirectory 'build.stderr.log')
+    if ($buildProcess.ExitCode -ne 0) { throw 'Installer build failed. See runtime/build.stderr.log.' }
 } finally { Pop-Location }
 $binDirectory = Join-Path $projectRoot 'bin'
 New-Item -ItemType Directory -Path $binDirectory -Force | Out-Null

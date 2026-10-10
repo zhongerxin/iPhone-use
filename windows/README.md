@@ -1,12 +1,17 @@
 # iPhone Use for Windows (experimental)
 
+**普通用户请先阅读 [中文上手教程](QUICKSTART.zh-CN.md)，从 [Releases](https://github.com/jebhi/iPhone-use/releases) 下载带预编译安装器的 ZIP，按 01～04 编号运行。下面主要是源码开发说明。**
+
 Windows USB control of an iPhone using a prebuilt WebDriverAgent runner and a
 persistent stdio MCP server. This adapter adds Windows lifecycle and Pillow
 screenshot processing while reusing the original iPhone Use control modules.
 It does not require the CrossCode desktop application.
 
-The original macOS plugin stays at the repository root. Windows users should
-follow this document rather than register the root macOS MCP command.
+The original macOS plugin stays at the repository root. For the prebuilt Windows
+release, install Python 3.12 and Apple USB drivers, connect and trust one iPhone,
+then run `01-setup.cmd`, `02-install-wda.cmd`, `03-register-mcp.cmd` and
+`04-start-wda.cmd` in order. No Rust toolchain is needed for that release.
+The remaining setup/build instructions below are for source users.
 
 ## Prerequisites
 
@@ -54,7 +59,7 @@ SideStore endpoint. Signing depends on the external service and Apple account
 limits. No existing certificates are revoked or apps uninstalled.
 
 The Rust directory-install path has previously failed near 80% after signing.
-Running `install-wda.cmd` again uses the same signed bundle through
+`install-wda.cmd` automatically retries the same signed bundle through
 pymobiledevice3 and verifies the installed app, without logging in again. The
 underlying Rust transfer failure remains unresolved.
 

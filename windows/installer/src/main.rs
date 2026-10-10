@@ -67,7 +67,7 @@ async fn run(root: PathBuf, check_only: bool, anisette_only: bool) -> Result<(),
     let otp_root = root.clone();
     let state = root.join("runtime/signing");
     std::fs::create_dir_all(&state).map_err(|_| "Cannot create signing state directory")?;
-    let server = std::env::var("WDA_ANISETTE_URL").unwrap_or_else(|_| "https://ani.sidestore.io".into());
+    let server = std::env::var("WDA_ANISETTE_URL").unwrap_or_else(|_| "https://ani.sidestore.app".into());
     if !["https://ani.sidestore.io", "https://ani.sidestore.app", "https://ani.sidestore.zip"].contains(&server.as_str()) {
         return Err("Unsupported signing service; choose a verified SideStore HTTPS endpoint".into());
     }
@@ -131,6 +131,14 @@ async fn run(root: PathBuf, check_only: bool, anisette_only: bool) -> Result<(),
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--version") {
+        println!("wda-installer {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.iter().any(|arg| arg == "--help") {
+        println!("wda-installer [project-root] [--check | --anisette-check]\nSigns the prepared WDA using the owner's local Apple login dialog. --check does not sign or install.");
+        return;
+    }
     let root = args.get(1).map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap());
     match run(root, args.iter().any(|arg| arg == "--check"), args.iter().any(|arg| arg == "--anisette-check")).await {
         Ok(()) => {},

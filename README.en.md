@@ -1,6 +1,6 @@
 # iPhone Use
 
-> Windows users: this fork includes an experimental [Windows USB + MCP adapter](windows/README.md). The original macOS plugin remains at the repository root.
+> Windows users: download the prebuilt Windows ZIP from [Releases](https://github.com/jebhi/iPhone-use/releases), then follow the [Chinese quickstart](windows/QUICKSTART.zh-CN.md) or [Windows documentation](windows/README.md). This experimental USB + MCP adapter does not require CrossCode. The original macOS plugin remains at the repository root.
 
 [中文](README.md) · **English**
 

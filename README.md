@@ -2,7 +2,7 @@
 
 **中文** · [English](README.en.md)
 
-> Windows 用户：此 fork 提供实验性 [Windows USB + MCP 适配](windows/README.md)。原版 macOS 插件保留在仓库根目录。
+> Windows 用户：先看 [中文上手教程](windows/QUICKSTART.zh-CN.md)，到 [Releases](https://github.com/jebhi/iPhone-use/releases) 下载带预编译安装器的 Windows ZIP，按 01～04 运行。实验性 Windows USB + MCP 适配不需要安装 CrossCode。原版 macOS 插件保留在仓库根目录。
 
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 

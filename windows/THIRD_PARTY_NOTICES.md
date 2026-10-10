@@ -26,3 +26,9 @@ they are obtained from their upstream package registries with their own notices.
 The Apple root certificate in the authentication library is public trust material,
 not a user signing certificate. WDA binaries and Apple signing material are not
 distributed by this fork.
+
+Windows binary releases additionally carry native dependency license texts in
+`windows/bin/licenses`, including the GCC runtime exception, winpthread notice,
+OpenSSL 3.5.4 license and Rust dependency notices. Corresponding patched source
+is distributed in the same tagged source archive. The binary installer is not
+Authenticode-signed and is released as an experimental prerelease.
