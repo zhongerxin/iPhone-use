@@ -5,6 +5,7 @@ context, how many model round trips a step needs, and bounded waits with no sile
 """
 import base64
 import contextlib
+import copy
 import io
 import json
 import os
@@ -153,6 +154,143 @@ class CompactObservationTests(PhoneCase):
 
 
 class LongInputTests(PhoneCase):
+    def test_another_runtime_cannot_resume_into_its_new_focused_field(self):
+        self.client.session_id = "shared-session"
+        self.client.close = lambda: None
+        second_field = copy.deepcopy(self.client.elements[0])
+        second_field.update(id="other", label="Other")
+        self.client.elements.append(second_field)
+        runtimes = []
+        for _ in range(2):
+            runtime = Runtime(self.directory.name)
+            self.addCleanup(runtime.close)
+            runtime.client = self.client
+            runtime.phone = PhoneController(self.client, self.directory.name)
+            runtime.phone.call_budget = 0
+            runtime.phone.typing_piece = 2
+            runtimes.append(runtime)
+        first, other = runtimes
+        started = first.call("pua_type_text", {"selector": {"label": "Target"}, "text": "ABCD"})
+        other.call("pua_tap", {"selector": {"label": "Other"}})
+        actions_before = list(self.client.actions())
+        error = self.assert_code("input_continuation_expired", lambda: first.call(
+            "pua_type_text", {"continue_token": started["continue_token"]}))
+        self.assertFalse(error.details["action_executed"])
+        self.assertEqual(self.client.elements[0]["value"], "AB")
+        self.assertEqual(second_field["value"], "")
+        self.assertEqual(self.client.actions(), actions_before)
+        self.assertIsNone(first.phone.pending_input)
+
+    def test_changed_app_session_or_focus_invalidates_without_a_phone_action(self):
+        for changed in ("app", "session", "missing_focus", "secure_focus"):
+            with self.subTest(changed=changed):
+                self.client = FakeWDA()
+                self.client.session_id = "original-session"
+                self.phone = PhoneController(self.client, self.directory.name)
+                self.phone.call_budget = 0
+                started = self.phone.type_text({"label": "Target"}, "a" * 300, submit=True)
+                if changed == "app":
+                    self.client.app = "com.example.other"
+                elif changed == "session":
+                    self.client.session_id = "replacement-session"
+                elif changed == "missing_focus":
+                    self.client.focused = None
+                else:
+                    self.client.focused["kind"] = "XCUIElementTypeSecureTextField"
+                actions_before = list(self.client.actions())
+                error = self.assert_code("input_continuation_expired", lambda: self.phone.type_text(
+                    continue_token=started["continue_token"]))
+                self.assertFalse(error.details["action_executed"])
+                self.assertFalse(error.details["recovery"]["replay_action"])
+                self.assertEqual(self.client.elements[0]["value"], "a" * 200)
+                self.assertEqual(self.client.actions(), actions_before)
+                self.assertIsNone(self.phone.pending_input)
+
+    def test_unreadable_focus_invalidates_without_typing_or_reusing_the_token(self):
+        self.phone.call_budget = 0
+        started = self.phone.type_text({"label": "Target"}, "a" * 300)
+        original = self.client.session
+
+        def session(method, path, payload=None, timeout=None):
+            if path == "/element/active":
+                raise WDAError("pua_unreachable", "Focus query disconnected")
+            return original(method, path, payload, timeout)
+
+        actions_before = list(self.client.actions())
+        with patch.object(self.client, "session", side_effect=session):
+            error = self.assert_code("input_continuation_expired", lambda: self.phone.type_text(
+                continue_token=started["continue_token"]))
+        self.assertFalse(error.details["action_executed"])
+        self.assertEqual(self.client.actions(), actions_before)
+        self.assert_code("input_continuation_expired", lambda: self.phone.type_text(
+            continue_token=started["continue_token"]))
+        self.assertEqual(self.client.elements[0]["value"], "a" * 200)
+
+    def test_read_only_calls_preserve_continuation_in_the_same_context(self):
+        self.phone.call_budget = 0
+        started = self.phone.type_text({"label": "Target"}, "a" * 300)
+        self.phone.observe()
+        self.phone.find({"label": "Target"})
+        result = self.phone.type_text(continue_token=started["continue_token"])
+        self.assertTrue(result["action_complete"])
+        self.assertEqual(self.client.elements[0]["value"], "a" * 300)
+
+    def test_unreadable_foreground_invalidates_without_typing_or_submitting(self):
+        self.phone.call_budget = 0
+        started = self.phone.type_text({"label": "Target"}, "a" * 300, submit=True)
+        original = self.client.request
+
+        def request(method, path, payload=None, timeout=None):
+            if path == "/wda/activeAppInfo":
+                raise WDAError("pua_unreachable", "Foreground query disconnected")
+            return original(method, path, payload, timeout)
+
+        actions_before = list(self.client.actions())
+        with patch.object(self.client, "request", side_effect=request):
+            error = self.assert_code("input_continuation_expired", lambda: self.phone.type_text(
+                continue_token=started["continue_token"]))
+        self.assertFalse(error.details["action_executed"])
+        self.assertEqual(error.details["cause"], {"code": "pua_unreachable"})
+        self.assertEqual(self.client.actions(), actions_before)
+        self.assertIsNone(self.phone.pending_input)
+        self.assertEqual(self.client.elements[0]["value"], "a" * 200)
+
+    def test_session_recreated_by_a_focus_query_stops_before_typing(self):
+        self.client.session_id = "original-session"
+        self.phone.call_budget = 0
+        started = self.phone.type_text({"label": "Target"}, "a" * 300)
+        original = self.client.session
+
+        def session(method, path, payload=None, timeout=None):
+            if path == "/element/active":
+                self.client.session_id = "replacement-session"
+            return original(method, path, payload, timeout)
+
+        actions_before = list(self.client.actions())
+        with patch.object(self.client, "session", side_effect=session):
+            error = self.assert_code("input_continuation_expired", lambda: self.phone.type_text(
+                continue_token=started["continue_token"]))
+        self.assertEqual(error.details["reason"], "session_changed")
+        self.assertFalse(error.details["action_executed"])
+        self.assertEqual(self.client.actions(), actions_before)
+        self.assertEqual(self.client.elements[0]["value"], "a" * 200)
+
+    def test_batch_stops_at_a_rejected_continuation_without_running_later_steps(self):
+        self.phone.call_budget = 0
+        started = self.phone.type_text({"label": "Target"}, "a" * 300, submit=True)
+        self.client.focused = None
+        self.phone.call_budget = 90
+        actions_before = list(self.client.actions())
+        result = self.phone.batch([
+            {"op": "type_text", "args": {"continue_token": started["continue_token"]}},
+            {"op": "press_button", "args": {"name": "home"}},
+        ])
+        self.assertEqual(result["stop_reason"], "input_continuation_expired")
+        self.assertEqual((result["completed_steps"], result["stopped_at"]), (0, 0))
+        self.assertFalse(result["complete"])
+        self.assertEqual(self.client.actions(), actions_before)
+        self.assertEqual(self.client.elements[0]["value"], "a" * 200)
+
     def test_long_text_is_typed_in_short_requests_with_matching_timeouts(self):
         text = "中文 mix 输入。" * 45
         self.assertEqual(len(text), 450)

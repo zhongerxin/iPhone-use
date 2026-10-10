@@ -693,6 +693,8 @@ class PhoneController:
                 raise
             plan["focused"]=True;plan["pieces"].pop(0);plan["typed"]+=len(piece);sent+=1
         if plan["pieces"]:
+            if "app" not in plan:
+                plan.update(app=self.active_app(),session_id=getattr(self.client,"session_id",None))
             plan.update(token=uuid.uuid4().hex[:12],mark=self.accepted_actions,created=time.monotonic())
             self.pending_input=plan
             return {"action_executed":True,"action_complete":False,"input_complete":False,"verified":False,"verification_deferred":True,
@@ -716,10 +718,28 @@ class PhoneController:
 
     def continue_input(self,token):
         plan=self.pending_input
+        # A rejected or unreadable continuation must never remain reusable.
+        self.pending_input=None
+        def expired(reason,cause=None):
+            details={"action_executed":False,"reason":reason,
+                     "recovery":{"replay_action":False,"next_step":"Locate the original intended field and read its actual text, then type only the missing remainder with replace=false. Never resume into another app or field."}}
+            if cause:details["cause"]={"code":cause.code}
+            fail("input_continuation_expired","This continuation no longer has its original app, session and focused field, or it expired. Nothing was typed now.",**details)
         if not plan or plan["token"]!=token or self.accepted_actions!=plan["mark"] or time.monotonic()-plan["created"]>INPUT_TTL:
-            self.pending_input=None
-            fail("input_continuation_expired","This continuation is no longer usable: it was already finished, it expired, or another phone action ran since. Nothing was typed now.",action_executed=False,
-                 recovery={"replay_action":False,"next_step":"Read the field's actual text, then type only the missing remainder with replace=false."})
+            expired("token_or_action_changed")
+        if getattr(self.client,"session_id",None)!=plan["session_id"]:
+            expired("session_changed")
+        # The operation lock serializes tools, but another Runtime (or the user)
+        # can change focus between calls without changing this instance's counter.
+        try:
+            app=self.active_app()
+            path,_=self.focused_field()
+        except WDAError as error:
+            expired("context_unavailable",error)
+        if getattr(self.client,"session_id",None)!=plan["session_id"]:
+            expired("session_changed")
+        if app!=plan["app"]:expired("app_changed")
+        if path!=plan["path"]:expired("focus_changed")
         return self.type_pieces(plan)
 
     def region(self,region,viewport):
