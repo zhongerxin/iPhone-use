@@ -154,6 +154,27 @@ class CompactObservationTests(PhoneCase):
 
 
 class LongInputTests(PhoneCase):
+    def test_failed_initial_context_binding_reports_partial_input_without_a_token(self):
+        self.phone.call_budget = 0
+        original = self.client.request
+
+        def request(method, path, payload=None, timeout=None):
+            if path == "/wda/activeAppInfo":
+                raise WDAError("pua_unreachable", "Foreground query disconnected")
+            return original(method, path, payload, timeout)
+
+        with patch.object(self.client, "request", side_effect=request):
+            error = self.assert_code("pua_unreachable", lambda: self.phone.type_text(
+                {"label": "Target"}, "a" * 300, submit=True))
+        self.assertIn("characters_confirmed", error.details)
+        self.assertEqual((error.details["characters_confirmed"], error.details["characters_total"]), (200, 300))
+        self.assertTrue(error.details["action_executed"])
+        self.assertFalse(error.details["action_complete"])
+        self.assertFalse(error.details["recovery"]["replay_action"])
+        self.assertEqual(self.client.elements[0]["value"], "a" * 200)
+        self.assertFalse(any(body == {"value": ["\n"]} for _, _, body in self.client.actions()))
+        self.assertIsNone(self.phone.pending_input)
+
     def test_another_runtime_cannot_resume_into_its_new_focused_field(self):
         self.client.session_id = "shared-session"
         self.client.close = lambda: None

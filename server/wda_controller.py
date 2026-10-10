@@ -694,7 +694,12 @@ class PhoneController:
             plan["focused"]=True;plan["pieces"].pop(0);plan["typed"]+=len(piece);sent+=1
         if plan["pieces"]:
             if "app" not in plan:
-                plan.update(app=self.active_app(),session_id=getattr(self.client,"session_id",None))
+                try:plan.update(app=self.active_app(),session_id=getattr(self.client,"session_id",None))
+                except WDAError as error:
+                    self.pending_input=None
+                    error.details.update(characters_confirmed=plan["typed"],characters_total=plan["total"],
+                                         recovery={"replay_action":False,"next_step":"Locate the original intended field, read its actual text, and enter only the missing remainder with replace=false."})
+                    raise
             plan.update(token=uuid.uuid4().hex[:12],mark=self.accepted_actions,created=time.monotonic())
             self.pending_input=plan
             return {"action_executed":True,"action_complete":False,"input_complete":False,"verified":False,"verification_deferred":True,
