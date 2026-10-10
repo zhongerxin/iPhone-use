@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "android-use",
+  "version": "0.1.6",
+  "description": "通过 ADB 和 UI Automator 操作真实 Android，支持中文输入、批处理、列表采集与屏幕预览。",
+  "author": {
+    "name": "ZHONG XIN"
+  },
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Android Use",
+        "shortDescription": "Control your Android phone",
+        "longDescription": "通过 USB 或已配对无线 ADB 操作 Android；独立安装、原生控件、单次动作请求及按需屏幕预览。",
+        "developerName": "ZHONG XIN",
+        "category": "Productivity",
+        "logo": "./assets/icon.svg",
+        "composerIcon": "./assets/icon.svg",
+        "defaultPrompt": [
+          "配置我的 Android 手机并验证连接。",
+          "用 Android Use 完成手机任务并核验结果。"
+        ]
+      }
+    }
+  }
+}

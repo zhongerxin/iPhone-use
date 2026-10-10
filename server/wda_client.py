@@ -5,6 +5,8 @@ import json
 import socket
 import time
 from urllib.parse import urlsplit
+# Preserve the public error name for existing iPhone consumers.
+from phone_protocol import PhoneError as WDAError
 
 # One element query answers with the fields target selection needs, so it replaces
 # separate rect and type reads. Both keys are handled by the pinned WDA's settings.
@@ -12,15 +14,6 @@ ELEMENT_RESPONSE_ATTRIBUTES = "type,label,rect,enabled,attribute/name,attribute/
 SESSION_SETTINGS = {"waitForIdleTimeout": 0, "animationCoolOffTimeout": 0,
                     "shouldUseCompactResponses": False,
                     "elementResponseAttributes": ELEMENT_RESPONSE_ATTRIBUTES}
-
-
-class WDAError(Exception):
-    def __init__(self, code, message, uncertain=False, details=None):
-        super().__init__(message)
-        self.code, self.uncertain, self.details = code, uncertain, details or {}
-
-    def as_dict(self):
-        return {"code": self.code, "message": str(self), "uncertain": self.uncertain, **self.details}
 
 
 class WDAClient:

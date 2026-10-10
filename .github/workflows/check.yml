@@ -14,4 +14,5 @@ jobs:
       - run: npm ci --prefix ui --no-audit --no-fund
       - run: npm run build --prefix ui
       - run: git diff --exit-code -- assets/phone-screen.html
+      - run: python -m pip install -r android/requirements.txt
       - run: sh scripts/check.sh

@@ -14,7 +14,7 @@ const preview = (fields = {}) => ({ server_time: 1000, frame: null, viewport: nu
 // Fixtures exist only in this isolated DOM test, never in the shipped widget.
 const frame = (seq = 1) => ({ seq, data: 'test-image-only', mimeType: 'image/png', width: 900, height: 1800 });
 
-async function harness({ reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
+async function harness({ platform = 'ios', reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
   let now = 0;
   let timerId = 0;
   let instance;
@@ -45,6 +45,7 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
       return animation;
     },
   }]));
+  elements.app.dataset.platform = platform;
   // The stage is the area left between the status pill and the toolbar; reading it is a layout read.
   const stageSize = { width: 376, height: 776 };
   Object.defineProperty(elements.stage, 'clientWidth', { configurable: true, get: () => { layoutReads++; return stageSize.width; } });
@@ -642,4 +643,77 @@ test('host theme is applied and followed, and teardown releases the toolbar', as
   h.elements['tool-home'].click();
   await flush();
   assert.equal(h.calls.length, before);
+});
+
+test('Android dynamically fits tall phones, tablets, foldables and landscape frames without clipping', async () => {
+  const h = await harness({ platform: 'android' });
+  let seq = 0;
+  for (const [w, ht] of [[1080,1920],[1440,2960],[1080,2400],[1080,2520],[1600,2560],[2208,1840],[1800,1800],[2960,1440]]) {
+    for (const [pw,ph] of [[300,700],[900,280],[160,220]]) {
+      h.stageSize.width=pw;h.stageSize.height=ph;
+      h.app.ontoolresult({structuredContent:preview({frame:{...frame(++seq),width:w,height:ht},viewport:{width:w,height:ht}})});
+      h.resize.callback();
+      const bezel=parseFloat(h.elements.device.style['--bezel']);
+      const width=parseFloat(h.elements.device.style.width),height=parseFloat(h.elements.device.style.height);
+      assert.ok(width<=pw && height<=ph);
+      assert.ok(Math.abs((width-2*bezel)/(height-2*bezel)-w/ht)<1e-8);
+      assert.equal(h.elements.device.style['--screen-radius'],'0px');
+      h.app.ontoolresult({structuredContent:preview({events:[{id:seq,kind:'tap',at:1000,point:{x:w*.75,y:ht*.25},viewport:{width:w,height:ht}}]})});
+      const cursor=h.elements.screen.children.at(-1) ?? h.elements.cursor;
+      assert.equal(cursor.style.left,'75%');assert.equal(cursor.style.top,'25%');
+    }
+  }
+});
+
+test('Android rotates from actual frame dimensions even while the observation viewport is stale', async () => {
+  const h=await harness({platform:'android'});
+  h.app.ontoolresult({structuredContent:preview({frame:{...frame(1),width:1440,height:2960},viewport:{width:1440,height:2960}})});
+  h.app.ontoolresult({structuredContent:preview({frame:{...frame(2),width:2960,height:1440},viewport:{width:1440,height:2960}})});
+  assert.equal(h.elements.device.dataset.orientation,'landscape');
+  const b=parseFloat(h.elements.device.style['--bezel']);
+  assert.ok(Math.abs((parseFloat(h.elements.device.style.width)-2*b)/(parseFloat(h.elements.device.style.height)-2*b)-2960/1440)<1e-8);
+  const count=h.elements.screen.children.length;
+  h.app.ontoolresult({structuredContent:preview({events:[{id:1,kind:'tap',at:1000,point:{x:720,y:1480},viewport:{width:1440,height:2960}}]})});
+  assert.equal(h.elements.screen.children.length,count);
+});
+
+test('Android rejects old gesture geometry after even a modest aspect change', async () => {
+  const h=await harness({platform:'android'});
+  h.app.ontoolresult({structuredContent:preview({frame:{...frame(1),width:1440,height:3120},viewport:{width:1440,height:3120}})});
+  h.app.ontoolresult({structuredContent:preview({events:[{id:1,kind:'tap',at:1000,point:{x:720,y:1480},viewport:{width:1440,height:2960}}]})});
+  assert.equal(h.elements.cursor.hidden,true);
+});
+
+test('Android polls video frames at 50ms while iPhone cadence stays unchanged', async () => {
+  const h=await harness({platform:'android',reply:()=>({structuredContent:preview({frame:frame(),transport:'scrcpy'})})});
+  await h.tick();
+  assert.equal([...h.timers.values()][0].delay,50);
+  assert.equal(h.elements.app.dataset.transport,'scrcpy');
+});
+
+test('Android stops presenting a stale picture after repeated transport failures', async () => {
+  let fail=false;
+  const h=await harness({platform:'android',reply:()=>fail?Promise.reject(new Error('closed')):{structuredContent:preview({frame:frame()})}});
+  await h.tick();h.elements.image.onload();fail=true;
+  await h.tick();await h.tick();
+  assert.equal(h.elements.image.hidden,true);
+  assert.equal(h.elements['live-text'].textContent,'预览通信中断');
+});
+
+test('Android stops retrying a stalled host even after focus and tool results, and refresh rearms it', async () => {
+  let fail = true;
+  const h = await harness({ platform: 'android', reply: () => fail
+    ? Promise.reject(new Error('host request stalled'))
+    : { structuredContent: preview({ frame: frame(), frame_available: true }) } });
+  await h.tick(); await h.tick();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.elements.app.dataset.previewBlocked, 'true');
+  h.event('focus');
+  h.app.ontoolresult({ structuredContent: preview() });
+  for (let i = 0; i < 50; i++) await h.tick();
+  assert.equal(h.calls.length, 2);
+  fail = false;
+  h.elements['tool-refresh'].click(); await flush(); await h.tick();
+  assert.equal(h.elements.app.dataset.previewBlocked, 'false');
+  assert.equal(h.calls.at(-1).name, 'pua_screen_frame');
 });

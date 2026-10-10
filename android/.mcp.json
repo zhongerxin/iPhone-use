@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "android_use": {
+      "type": "stdio",
+      "command": "sh",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/android_mcp.sh"
+      ]
+    }
+  }
+}
