@@ -38,6 +38,13 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'RELEASE-START.zh-CN.md') -Destin
 $revision = (git -C $repositoryRoot rev-parse HEAD).Trim()
 Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-REVISION.txt') -Value $revision -Encoding ASCII
 $zipPath = Join-Path $buildRoot ('iphone-use-'+$Tag+'-win-x64.zip')
+# Some registry/MSYS2 license files use Unix epoch timestamps, outside ZIP's
+# supported date range. Normalize only copied files, never dependency originals.
+Get-ChildItem -LiteralPath $packageRoot -Recurse -File | ForEach-Object {
+    if ($_.LastWriteTimeUtc.Year -lt 1980 -or $_.LastWriteTimeUtc.Year -gt 2107) {
+        $_.LastWriteTimeUtc = [datetime]::new(1980,1,2,0,0,0,[DateTimeKind]::Utc)
+    }
+}
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -CompressionLevel Optimal
 $sourceZip = Join-Path $buildRoot ('iphone-use-'+$Tag+'-source.zip')
 git -C $repositoryRoot archive --format=zip --output=$sourceZip HEAD
