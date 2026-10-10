@@ -822,7 +822,7 @@ def _worker(state_dir, job_id, owner_token, base_url):
                     _write_json(path, job)
                 forward = manager.state_dir / "runtime/forward"
                 forward.mkdir(exist_ok=True, mode=0o700)
-                for name in ("package.json", "package-lock.json", "forward.mjs"):
+                for name in ("package.json", "package-lock.json", "forward.mjs", "device-transport.mjs"):
                     shutil.copyfile(PLUGIN_ROOT / "tooling" / name, forward / name)
                     (forward / name).chmod(0o600)
                 lock_hash = hashlib.sha256((forward / "package-lock.json").read_bytes()).hexdigest()

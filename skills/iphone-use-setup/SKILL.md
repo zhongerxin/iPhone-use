@@ -11,7 +11,7 @@ description: 配置 PUA（Phone Use Agent），在用户自己的 iPhone 上安�
 
 本对话首次使用手机、尚未取得 READY 时，先直接调用 `pua_setup(action="status")`，按下节复用健康服务或活动工作，缺少服务才 start 一次；服务就绪后调用 `pua_ready(recover=true, screenshot=false)`，再执行用户手机任务。不要先 READY 失败再 setup；不以之前聊天的 READY 或已安装插件代替当前证明。本对话已 READY 且通道未失效时直接继续，不为每项任务重复 doctor、discover、build 和 start。首次配置或 READY 返回具体缺项时，使用 `pua_doctor` 与 `pua_setup(action="discover")` 读取 Xcode、已连接设备、签名、端口及进程状态。多台 iPhone 按用户提供的设备选择；只有一台符合条件时可以直接使用。设备 UDID、Team ID、日志和签名配置保存在用户本机，不写进源码或 Git。
 
-正常任务调用 `pua_ready(recover=true)` 或省略 recover 使用默认 true，不因预检或谨慎主动关闭恢复。只读诊断或用户明确禁止重启时传 `recover=false`，保留限制。常规任务无需截图时可传 `screenshot=false`；截图能力待实际需要截图时再使用。返回 `ready=true, state="ready"` 的 proof 包含 PUA status、可用会话、真实前台 App、设备视口、解锁状态与当前观察；直接用嵌套 observation 准备下一步，不立即重复 observe 或再做一轮导航测试。若镜像占用且控件树为空，工具返回 `mirroring_conflict`，退出镜像后重验 READY。Runner 图标、BUILD SUCCEEDED 或端口开放不足以声明 READY。READY 同时关联手机屏幕侧边栏，宿主支持时默认打开；已有通道要重新打开画面用 `pua_screen()`，不要重复 READY。预览走独立 USB MJPEG 通道（默认设备端口 9100），不使用 XML 或截图轮询；预览不可用本身不否定控制通道 READY，也不要求循环重启。READY 证明控制通道可用；常规 App 操作默认乐观执行，下一步所需观察顺带判断进度，最终关键结果才显式验收。
+正常任务调用 `pua_ready(recover=true)` 或省略 recover 使用默认 true，不因预检或谨慎主动关闭恢复。只读诊断或用户明确禁止重启时传 `recover=false`，保留限制。常规任务无需截图时可传 `screenshot=false`；截图能力待实际需要截图时再使用。返回 `ready=true, state="ready"` 的 proof 包含 PUA status、可用会话、真实前台 App、设备视口、解锁状态与当前观察；直接用嵌套 observation 准备下一步，不立即重复 observe 或再做一轮导航测试。若镜像占用且控件树为空，工具返回 `mirroring_conflict`，退出镜像后重验 READY。Runner 图标、BUILD SUCCEEDED 或端口开放不足以声明 READY。READY 同时关联手机屏幕侧边栏，宿主支持时默认打开；已有通道要重新打开画面用 `pua_screen()`，不要重复 READY。预览走独立 MJPEG 通道（优先 USB，不可用时使用已配对设备的 CoreDevice 网络隧道，默认设备端口 9100），不使用 XML 或截图轮询；预览不可用本身不否定控制通道 READY，也不要求循环重启。READY 证明控制通道可用；常规 App 操作默认乐观执行，下一步所需观察顺带判断进度，最终关键结果才显式验收。
 
 `phone_locked` 会自动暂停预览并记录 `device_locked`，无需再显式 pause。等待用户实际解锁通知后重验 READY；成功时仅解除同一次锁屏暂停，App 认证与旧版未知暂停保持显式恢复。READY 的 `preview` 返回暂停原因；不要把预览空白当成控制通道失效。
 
@@ -55,3 +55,7 @@ READY 已返回设备、会话、视口和当前 observation，复用这些信�
 Apple 的 [开发者账户说明](https://developer.apple.com/help/account/basics/about-your-developer-account)说明 Personal Team 最多可安装 3 个 App / 设备，provisioning profile 自签发起 7 天过期，届时需要重建重装。免费账户可用于个人设备测试，不能据此承诺永久运行。
 
 [Apple 开发者模式](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)与 [Appium 真机准备](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/device-setup/)提供配对、开发模式与签名要求。流程以当前 Xcode/iOS 的实际提示和工具诊断为准；本插件不要求越狱。
+
+## 已配对设备的 Wi-Fi 连接
+
+首次签名、安装和配对优先使用 USB。完成后，手机与 Mac 保持同一 Wi-Fi，Xcode 能显示设备通过网络连接时，控制转发和预览会自动回退至该设备的 CoreDevice 隧道；不扫描局域网或要求用户填写 IP。切换期间等待画面恢复，不重放已经发出的手势。无线故障先检查设备解锁、同一网络和 Xcode 的连接状态，必要时接回 USB；不因无线不可用重新配对或重装。
