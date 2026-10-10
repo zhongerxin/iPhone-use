@@ -93,7 +93,11 @@ SCHEMAS["batch"]=obj({"steps":{"type":"array","minItems":1,"maxItems":20,"items"
 SCHEMAS["ready"]["examples"]=[{"recover":True,"screenshot":False}]
 SCHEMAS["screen"]=obj({"action":string("Default open displays the live iPhone sidebar. Pause before password/Face ID takeover; resume only after the user confirms completion.",enum=["open","pause","resume"])})
 SCHEMAS["screen_frame"]=obj({"after_seq":num(0,9007199254740991,"integer"),"last_event_id":num(0,9007199254740991,"integer")})
-SCHEMAS["screen_action"]=obj({"action":string("refresh reconnects the preview stream, home returns the iPhone to its Home screen, screenshot copies a native capture to the Mac clipboard.",enum=["refresh","home","screenshot"])},("action",))
+SCHEMAS["screen_action"]=obj({
+ "action":string("Preview controls: refresh, home, screenshot, refresh viewport geometry, or a user pointer tap/drag in iPhone points.",enum=["refresh","home","screenshot","tap","drag","viewport"]),
+ "x":num(0,10000),"y":num(0,10000),"to_x":num(0,10000),"to_y":num(0,10000),
+ "width":num(1,10000),"height":num(1,10000),"duration":num(.05,1)
+},("action",))
 # Tools the preview App calls itself; the model never sees them.
 APP_TOOLS=("screen_frame","screen_action")
 DESCRIPTIONS={
@@ -175,7 +179,7 @@ for tool in TOOLS:
         tool["_meta"]["openai/ui"]={"entrypoints":[{"type":"thread"}]}
         tool["annotations"].update(readOnlyHint=False,destructiveHint=False,idempotentHint=True)
     if tool["name"][len("pua_"):] in APP_TOOLS:tool["_meta"]={"ui":{"visibility":["app"]}}
-    if tool["name"]=="pua_screen_action":tool["annotations"].update(readOnlyHint=False,destructiveHint=False,idempotentHint=True)
+    if tool["name"]=="pua_screen_action":tool["annotations"].update(readOnlyHint=False,destructiveHint=True,idempotentHint=False)
 
 
 def validate(value,schema,path="arguments"):
@@ -214,6 +218,11 @@ def validate_semantics(name,args):
     from wda_controller import predicate
     for k in ("selector","expect","end_selector"):
         if k in args:predicate(args[k])
+    if name=="screen_action":
+        required={"action"}
+        if args["action"] in ("tap","drag"):required.update(("x","y","width","height"))
+        if args["action"]=="drag":required.update(("to_x","to_y","duration"))
+        if set(args)!=required:raise WDAError("invalid_argument","Provide exactly the fields required for this screen action.",details={"action_executed":False})
     if name=="tap":
         semantic="selector" in args
         coords=all(k in args for k in ("x","y"))
@@ -304,7 +313,7 @@ class Runtime:
         if name in ("pua_screen","pua_screen_frame","pua_screen_action"):self.identify_device()
         # Cached preview polling does not share the PUA action/session lock.
         if name=="pua_screen_frame":return self.screen.frame(**args)
-        if name=="pua_screen_action":return self.screen_action(args["action"])
+        if name=="pua_screen_action" and args["action"] not in ("tap","drag","viewport"):return self.screen_action(args["action"])
         if name=="pua_screen":
             action=args.get("action","open")
             if action=="pause":self.screen.set_paused(True)
@@ -323,6 +332,7 @@ class Runtime:
                         sid=cached.get("session_id","")
                         if cached.get("url")==self.base_url and isinstance(sid,str) and re.fullmatch(r"[A-Za-z0-9-]{1,128}",sid):self.client.session_id=sid
                     except (ValueError,OSError,AttributeError):pass
+                if name=="pua_screen_action":return self.screen_gesture(args)
                 return self._call(name,args)
             finally:
                 sid=getattr(self.client,"session_id",None)
@@ -361,6 +371,42 @@ class Runtime:
                 pass
         self._device_lookup=threading.Thread(target=lookup,name="wda-device-model",daemon=True)
         self._device_lookup.start()
+
+    def screen_gesture(self,args):
+        """App-only pointer input and geometry recovery, under the shared operation lock and session."""
+        if self.screen.paused():
+            raise WDAError("preview_paused","Preview is paused; no gesture was sent.",details={"action_executed":False})
+        if self.client.request("GET","/wda/locked").get("value") is not False:
+            self.screen.set_paused(True,reason="device_locked")
+            raise WDAError("phone_locked","Unlock the iPhone before using the preview.",details={"action_executed":False})
+        viewport=self.phone.viewport()
+        if args["action"]=="viewport":return {"viewport":viewport}
+        if any(args[key]!=viewport[key] for key in ("width","height")):
+            raise WDAError("stale_viewport","The phone rotated. Wait for a fresh frame before trying again.",details={"action_executed":False})
+        points=[(args["x"],args["y"])]
+        if args["action"]=="drag":points.append((args["to_x"],args["to_y"]))
+        if any(x>=viewport["width"] or y>=viewport["height"] for x,y in points):
+            raise WDAError("invalid_argument","Pointer is outside the phone viewport.",details={"action_executed":False})
+        token=self.screen.begin(args["action"])
+        try:
+            if args["action"]=="tap":
+                # Synthesize a short touch directly; XCTest's convenience tap
+                # adds synchronization overhead to interactive pointer input.
+                self.phone.screen_event("tap",point={"x":args["x"],"y":args["y"]})
+                self.phone.post("/actions",{"actions":[{"type":"pointer","id":"preview-finger",
+                    "parameters":{"pointerType":"touch"},"actions":[
+                        {"type":"pointerMove","duration":0,"origin":"viewport","x":args["x"],"y":args["y"]},
+                        {"type":"pointerDown","button":0},
+                        {"type":"pause","duration":50},
+                        {"type":"pointerUp","button":0}]}]})
+            else:self.phone.post("/wda/dragfromtoforduration",{"fromX":args["x"],"fromY":args["y"],"toX":args["to_x"],"toY":args["to_y"],"duration":args["duration"]})
+            return {"ok":True,"action":args["action"],"action_executed":True}
+        except WDAError as error:
+            error.details.update({"uncertain":True,"action_complete":False,"verification_required":"Inspect the phone before another gesture; do not replay automatically."})
+            raise
+        finally:
+            self.phone.external_action()
+            self.screen.end(token)
 
     def screen_action(self,action):
         """Toolbar of the preview App: the user's own click, outside the model's tool sequence."""
@@ -644,6 +690,15 @@ def serve(runtime):
             runtime.replied()
     worker=threading.Thread(target=work,name="wda-tools",daemon=True)
     worker.start()
+    # Pointer gestures must not block frame polling. Refuse a second gesture instead of
+    # queueing input against a screen that may have changed in the meantime.
+    screen_gate=threading.Lock()
+    screen_worker=None
+    def screen_work(ident,params):
+        try:
+            result=tool_result(runtime,params)
+            send({"jsonrpc":"2.0","id":ident,"result":result})
+        finally:screen_gate.release()
     try:
         for line in sys.stdin:
             request=None
@@ -674,6 +729,12 @@ def serve(runtime):
                     arrived=time.monotonic()
                     if params.get("name") not in ("pua_screen_frame","pua_screen","pua_screen_action"):
                         jobs.put((ident,params,arrived));continue
+                    if params.get("name")=="pua_screen_action" and isinstance(params.get("arguments"),dict) and params["arguments"].get("action") in ("tap","drag","viewport"):
+                        if screen_gate.acquire(blocking=False):
+                            screen_worker=threading.Thread(target=screen_work,args=(ident,params),name="wda-screen-action",daemon=True)
+                            screen_worker.start();continue
+                        result=result_content({"error":{"code":"device_busy","message":"A screen action is already running."}},structured=True)
+                        send({"jsonrpc":"2.0","id":ident,"result":result});continue
                     # Preview polls, its toolbar and opening or pausing the panel never wait behind a phone operation.
                     result=tool_result(runtime,params)
                     if params.get("name")=="pua_screen":
@@ -687,6 +748,7 @@ def serve(runtime):
     finally:
         # Finish the phone operation already accepted, then stop: its outcome must be reported.
         jobs.put(None);worker.join()
+        if screen_worker is not None:screen_worker.join()
 
 
 def main():

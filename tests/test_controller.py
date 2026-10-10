@@ -157,7 +157,7 @@ class FakeWDA:
             if self.focused is not None and text != "\n" and self.input_override is None:
                 self.focused["value"] += text
             return None
-        if path in ("/wda/tap", "/wda/pressButton"):
+        if path in ("/wda/tap", "/wda/pressButton", "/actions"):
             return None
         if path == "/appium/settings":
             self.settings.append(payload["settings"])

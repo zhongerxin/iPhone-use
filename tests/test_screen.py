@@ -154,6 +154,23 @@ class ScreenHubTests(unittest.TestCase):
             self.assertIsNone(self.hub._wire(self.hub._read_state())["frame"])
             self.assertFalse(self.hub.start()["frame_available"])
 
+    def test_duplicate_frames_refresh_liveness_without_resending_pixels(self):
+        stop = threading.Event()
+        state = self.hub._read_state()
+        with patch("wda_screen.time.monotonic", return_value=10):
+            self.hub._publish_frame(jpeg(), 440, 956, stop)
+        with patch("wda_screen.time.monotonic", return_value=13):
+            self.assertEqual(self.hub._wire(state)["frame_age_ms"], 3000)
+            self.hub._publish_frame(jpeg(), 440, 956, stop)
+            wire = self.hub._wire(state, after_seq=1)
+            self.assertEqual(wire["frame_age_ms"], 0)
+            self.assertIsNone(wire["frame"])
+            self.assertEqual(self.hub._seq, 1)
+        stop.set()
+        with patch("wda_screen.time.monotonic", return_value=16):
+            self.hub._publish_frame(jpeg(), 440, 956, stop)
+            self.assertEqual(self.hub._wire(state)["frame_age_ms"], 3000)
+
     def test_latest_jpeg_is_encoded_only_when_requested_and_identical_frames_are_skipped(self):
         stop = threading.Event()
         state = self.hub._read_state()
@@ -220,11 +237,13 @@ class ScreenHubTests(unittest.TestCase):
                 self.hub.gesture("drag", from_point={"x": 20, "y": 80}, to_point={"x": 20, "y": 40}, duration_ms=300)
                 wire = other.start()
                 self.assertTrue(wire["busy"])
+                self.assertTrue(wire["input_busy"])
                 self.assertEqual(wire["viewport"], {"width": 440, "height": 956})
                 self.assertEqual([event["kind"] for event in wire["events"]], ["tap", "drag"])
                 self.assertEqual(len(other._wire(other._read_state(), last_event_id=1)["events"]), 1)
                 self.hub.end(token)
                 self.assertTrue(other.start()["busy"])
+                self.assertFalse(other.start()["input_busy"])
             with patch.object(ScreenHub, "_now", return_value=100_651):
                 self.assertFalse(other.start()["busy"])
             encoded = (self.directory / "screen-state.json").read_text()

@@ -10,7 +10,7 @@ ${source.replace("import { App } from '@modelcontextprotocol/ext-apps';", 'const
 })()`, { loader: 'ts', target: 'es2022' });
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
-const preview = (fields = {}) => ({ server_time: 1000, frame: null, viewport: null, busy: false, paused: false, events: [], ...fields });
+const preview = (fields = {}) => ({ server_time: 1000, frame_age_ms: 0, frame: null, viewport: null, busy: false, paused: false, events: [], ...fields });
 // Fixtures exist only in this isolated DOM test, never in the shipped widget.
 const frame = (seq = 1) => ({ seq, data: 'test-image-only', mimeType: 'image/png', width: 900, height: 1800 });
 
@@ -34,6 +34,10 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
     disabled: false, textContent: '', handlers: new Map(), children: [],
     addEventListener(name, fn) { this.handlers.set(name, fn); },
     removeEventListener(name) { this.handlers.delete(name); },
+    getBoundingClientRect() { return { left: 10, top: 20, width: 200, height: 400 }; },
+    setPointerCapture(id) { this.captured = id; },
+    hasPointerCapture(id) { return this.captured === id; },
+    releasePointerCapture() { this.captured = undefined; },
     click() { this.handlers.get('click')?.(); },
     removeAttribute(name) { delete this[name]; },
     cloneNode() { return { ...this, style: { ...this.style }, dataset: { ...this.dataset }, children: [], animation: undefined }; },
@@ -85,6 +89,7 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
   return {
     app: instance, calls, lifecycle, elements, document, timers, resize,
     requestOptions, stageSize,
+    advance(ms) { now += ms; },
     get layoutReads() { return layoutReads; },
     get imageWrites() { return imageWrites; },
     visibility(hidden) { document.hidden = hidden; listeners.get('visibilitychange')?.(); },
@@ -642,4 +647,208 @@ test('host theme is applied and followed, and teardown releases the toolbar', as
   h.elements['tool-home'].click();
   await flush();
   assert.equal(h.calls.length, before);
+});
+
+function pointerEvent(x, y, extra = {}) {
+  return { clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, preventDefault() {}, ...extra };
+}
+async function livePointerHarness() {
+  const h = await harness();
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(), viewport: { width: 400, height: 800 } }) });
+  h.elements.image.onload();
+  h.pointer = (name, x, y, extra) => h.elements.screen.handlers.get(name)?.(pointerEvent(x, y, extra));
+  return h;
+}
+test('pointer click and drag map scaled screen coordinates and dispatch once', async () => {
+  const h = await livePointerHarness();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  const taps = h.calls.filter(c => c.name === 'pua_screen_action');
+  assert.equal(JSON.stringify(taps[0].arguments), JSON.stringify({ action: 'tap', x: 100, y: 200, width: 400, height: 800 }));
+  h.app.ontoolresult({structuredContent: preview({frame_available:true})});
+  h.elements.image.onload();
+  h.pointer('pointerdown', 110, 320); h.pointer('pointerup', 110, 120); await flush();
+  const drag = h.calls.filter(c => c.name === 'pua_screen_action')[1].arguments;
+  assert.equal(drag.action, 'drag'); assert.equal(drag.y, 600); assert.equal(drag.to_y, 200);
+});
+test('pointer cancellation, secondary buttons, outside release and pause send nothing', async () => {
+  for (const scenario of ['cancel', 'outside', 'right', 'pause', 'rotate', 'hidden', 'multi']) {
+    const h = await livePointerHarness();
+    h.pointer('pointerdown', 60, 120, scenario === 'right' ? { button: 2 } : {});
+    if (scenario === 'cancel') h.pointer('pointercancel', 60, 120);
+    if (scenario === 'multi') h.pointer('pointerdown', 60, 120, { isPrimary: false, pointerId: 2 });
+    if (scenario === 'pause') h.app.ontoolresult({ structuredContent: preview({ paused: true }) });
+    if (scenario === 'rotate') h.app.ontoolresult({ structuredContent: preview({ viewport: { width: 800, height: 400 } }) });
+    if (scenario === 'hidden') h.visibility(true);
+    h.pointer('pointerup', scenario === 'outside' ? 400 : 60, 120); await flush();
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0, scenario);
+  }
+});
+test('pointer input requires a decoded live frame and cannot queue during a mutation', async () => {
+  const h = await livePointerHarness();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120);
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+});
+
+test('letterboxed margins are excluded and resized image coordinates stay accurate', async () => {
+  const h = await livePointerHarness();
+  h.elements.screen.getBoundingClientRect = () => ({ left: 10, top: 20, width: 400, height: 400 });
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0);
+  h.pointer('pointerdown', 160, 120); h.pointer('pointerup', 160, 120); await flush();
+  const tap = h.calls.find(c => c.name === 'pua_screen_action').arguments;
+  assert.equal(tap.x, 100); assert.equal(tap.y, 200);
+});
+test('a failed image decode and busy preview reject pointer input', async () => {
+  for (const scenario of ['decode', 'busy', 'offline']) {
+    const h = await livePointerHarness();
+    if (scenario === 'decode') { h.elements.image.onerror(); h.elements.image.onload(); }
+    if (scenario === 'busy') h.app.ontoolresult({ structuredContent: preview({ busy: true }) });
+    if (scenario === 'offline') h.app.ontoolresult({ structuredContent: preview({ frame_available: false }) });
+    h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0, scenario);
+  }
+});
+test('mutation failure warns once without automatic replay', async () => {
+  const h = await harness({reply: params => params.name === 'pua_screen_action'
+    ? Promise.reject(new Error('timeout')) : Promise.resolve({structuredContent:preview()})});
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(), viewport: { width: 400, height: 800 } }) });
+  h.elements.image.onload();
+  h.elements.screen.handlers.get('pointerdown')(pointerEvent(60,120));
+  h.elements.screen.handlers.get('pointerup')(pointerEvent(60,120)); await flush();
+  assert.match(h.elements.toast.textContent, /结果不确定/);
+  await h.tick(); await h.tick();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+});
+
+test('static fresh stream remains interactive without decoding duplicate frames', async () => {
+  const h = await livePointerHarness();
+  h.app.ontoolresult({structuredContent:preview({frame_available:true,frame_age_ms:50})});
+  h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+  assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,1);
+});
+test('retained stale stream and missing heartbeat metadata block input', async () => {
+  for (const age of [2500, null, undefined]) {
+    const h = await livePointerHarness();
+    h.app.ontoolresult({structuredContent:preview({frame_available:true,frame_age_ms:age})});
+    h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,0);
+  }
+});
+
+
+test('cosmetic busy afterglow does not block input, but an active operation does', async () => {
+  for (const input_busy of [false, true]) {
+    const h = await livePointerHarness();
+    h.app.ontoolresult({structuredContent:preview({busy:true,input_busy})});
+    h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,input_busy ? 0 : 1);
+  }
+});
+test('completed gesture replaces the pending poll with an immediate refresh', async () => {
+  const h = await livePointerHarness();
+  await h.tick();
+  h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+  assert.equal(Math.min(...[...h.timers.values()].map(t=>t.delay)),0);
+});
+
+function wheelEvent(deltaX, deltaY, extra = {}) {
+  return { clientX:110, clientY:220, deltaX, deltaY, deltaMode:0,
+    preventDefault() { this.prevented = true; }, ...extra };
+}
+test('trackpad wheel maps all four directions to bounded centered swipes', async () => {
+  for (const [dx,dy] of [[0,60],[0,-60],[60,0],[-60,0]]) {
+    const h = await livePointerHarness();
+    const event = wheelEvent(dx,dy);
+    h.elements.screen.handlers.get('wheel')(event); await flush();
+    const args = h.calls.find(c=>c.name==='pua_screen_action').arguments;
+    assert.equal(args.action,'drag'); assert.equal(event.prevented,true);
+    assert.equal(Math.sign(args.to_x-args.x), dx ? -Math.sign(dx) : 0);
+    assert.equal(Math.sign(args.to_y-args.y), dy ? -Math.sign(dy) : 0);
+    assert.ok(args.x>0 && args.to_x<400 && args.y>0 && args.to_y<800);
+  }
+});
+test('wheel accumulates small deltas and consumes momentum even after action completes', async () => {
+  const h = await livePointerHarness();
+  const wheel = h.elements.screen.handlers.get('wheel');
+  wheel(wheelEvent(0,10)); wheel(wheelEvent(0,10));
+  assert.equal(h.calls.length,0);
+  wheel(wheelEvent(0,10)); await flush();
+  h.app.ontoolresult({structuredContent:preview({frame_available:true})});
+  for(let i=0;i<15;i++) { h.advance(80); wheel(wheelEvent(0,50)); }
+  assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,1);
+  h.advance(181); wheel(wheelEvent(0,-50)); await flush();
+  assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,2);
+});
+test('wheel rejects pinch, stale frames, busy device, margins and pointer overlap', async () => {
+  for (const scenario of ['pinch','stale','busy','margin','pointer','hidden']) {
+    const h=await livePointerHarness();
+    if(scenario==='stale') h.advance(2500);
+    if(scenario==='busy') h.app.ontoolresult({structuredContent:preview({input_busy:true})});
+    if(scenario==='pointer') h.pointer('pointerdown',110,220);
+    if(scenario==='hidden') h.visibility(true);
+    h.elements.screen.handlers.get('wheel')(wheelEvent(0,100,{
+      ctrlKey:scenario==='pinch',clientX:scenario==='margin'?500:110})); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,0,scenario);
+  }
+});
+test('wheel normalizes line/page input and removes listener on teardown', async () => {
+  for(const mode of [1,2]) {
+    const h=await livePointerHarness();
+    h.elements.screen.handlers.get('wheel')(wheelEvent(0,2,{deltaMode:mode})); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,1);
+    await h.app.onteardown();
+    assert.equal(h.elements.screen.handlers.has('wheel'),false);
+  }
+});
+
+test('new frames reject input until their own load, including late loads from replaced frames', async () => {
+  const h = await livePointerHarness();
+  const oldLoad = h.elements.image.onload;
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(2) }) });
+  oldLoad(); // Even the same data URL belongs to a different frame generation.
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120);
+  h.elements.screen.handlers.get('wheel')({ ...pointerEvent(110,220), deltaY: 80, deltaX: 0, deltaMode: 0 });
+  await flush();
+  assert.equal(h.calls.length, 0);
+  h.elements.image.onload();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'tap').length, 1);
+});
+
+test('polling recovers rotated viewport and restores input without another phone tool', async () => {
+  let resolveViewport;
+  const h = await harness({ reply: params => params.arguments.action === 'viewport'
+    ? new Promise(resolve => { resolveViewport = resolve; })
+    : Promise.resolve({ structuredContent: preview({ frame_available: true,
+        frame: { ...frame(2), width: 1800, height: 900 }, viewport: { width: 400, height: 800 } }) }) });
+  await h.tick();
+  h.elements.image.onload();
+  const click = () => {
+    h.elements.screen.handlers.get('pointerdown')(pointerEvent(110,220));
+    h.elements.screen.handlers.get('pointerup')(pointerEvent(110,220));
+  };
+  click(); await flush();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'tap').length, 0);
+  resolveViewport({ structuredContent: { viewport: { width: 800, height: 400 } } });
+  await flush(); click(); await flush();
+  const tap = h.calls.find(c => c.arguments.action === 'tap');
+  assert.equal(tap.arguments.width, 800);
+  assert.equal(tap.arguments.height, 400);
+  assert.equal(tap.arguments.x, 400);
+  assert.equal(tap.arguments.y, 200);
+});
+
+test('viewport recovery failures are throttled while frame polling continues', async () => {
+  const h = await harness({ reply: params => Promise.resolve(params.arguments.action === 'viewport'
+    ? { isError: true }
+    : { structuredContent: preview({ frame_available: true,
+        frame: { ...frame(), width: 1800, height: 900 }, viewport: { width: 400, height: 800 } }) }) });
+  await h.tick();
+  for (let i = 0; i < 7; i++) await h.tick();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 1);
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_frame').length, 8);
+  await h.tick();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 2);
 });

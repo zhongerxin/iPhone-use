@@ -18,8 +18,10 @@ type Preview = {
   stream_id?: string;
   frame: Frame | null;
   frame_available?: boolean;
+  frame_age_ms?: number | null;
   viewport: Size | null;
   busy: boolean;
+  input_busy?: boolean;
   paused: boolean;
   pause_reason?: 'device_locked' | 'authentication' | 'unknown' | null;
   events: Gesture[];
@@ -85,6 +87,8 @@ const FAILED: Record<string, string> = {
   preview_paused: '认证接管期间已暂停',
   clipboard_unavailable: '截图未能写入剪贴板',
   pua_unreachable: '未连接到手机',
+  phone_locked: '请先解锁手机',
+  stale_viewport: '屏幕方向已变化，请等待新画面',
 };
 
 const validSize = (value: unknown): value is Size => {
@@ -325,6 +329,8 @@ function consume(value: unknown) {
   } else if (preview.frame_available === true || preview.frame) {
     setLive('live');
   }
+  freshUntil = typeof preview.frame_age_ms === 'number' && preview.frame_age_ms >= 0
+    ? performance.now() + Math.max(0, 2000 - preview.frame_age_ms) : -Infinity;
   const frame = preview.frame;
   if (frame && validSize(frame) && Number.isInteger(frame.seq) && frame.seq > frameSeq
       && typeof frame.data === 'string' && frame.data.length > 0
@@ -335,13 +341,23 @@ function consume(value: unknown) {
       dimensions = { width: frame.width, height: frame.height };
       fitFrame();
     }
-    image.src = `data:${frame.mimeType};base64,${frame.data}`;
+    decodedAt = -Infinity;
+    failedFrame = false;
+    const source = `data:${frame.mimeType};base64,${frame.data}`;
+    const generation = frameGeneration;
+    image.onload = () => {
+      if (disposed || generation !== frameGeneration || frame.seq !== frameSeq || image.src !== source || failedFrame) return;
+      decodedAt = performance.now();
+      lastGoodFrame = { source, size: { width: frame.width, height: frame.height } };
+    };
+    image.src = source;
     image.hidden = false;
     emptyState.hidden = true;
     device.hidden = false;
     screen.hidden = false;
   }
   if (typeof preview.busy === 'boolean') root.dataset.busy = String(preview.busy);
+  root.dataset.inputBusy = String(preview.input_busy ?? preview.busy);
   // Keep the edge light on between tools and while the model plans its next action.
   if (preview.busy === true) root.dataset.operating = 'true';
   if (Array.isArray(preview.events)) {
@@ -382,6 +398,7 @@ async function poll() {
     if (!visible() || generation !== frameGeneration) return;
     if (result.isError) throw new Error('preview unavailable');
     consume(result.structuredContent);
+    await recoverViewport();
     failures = 0;
     const preview = result.structuredContent as Partial<Preview> | undefined;
     nextDelay = preview?.paused || preview?.frame_available === false
@@ -434,6 +451,141 @@ async function act(name: ToolName) {
     syncTools();
   }
 }
+// Pointer coordinates are relative to the contained image, never the bezel or panel.
+let decodedAt = -Infinity;
+let freshUntil = -Infinity;
+let failedFrame = false;
+type PointerStart = { id: number; point: Point; client: Point; at: number; generation: number; stream?: string; size: Size; moved: boolean };
+let pointer: PointerStart | undefined;
+let viewportRetryAt = -Infinity;
+async function recoverViewport() {
+  if (!visible() || acting || root.dataset.live !== 'live' || root.dataset.inputBusy === 'true'
+      || !validSize(dimensions) || !validSize(viewport)
+      || Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01
+      || performance.now() < viewportRetryAt) return;
+  // A rotated MJPEG frame can arrive without any phone tool updating the cached viewport.
+  // Refresh only on mismatch; failures are throttled and never replay a gesture.
+  viewportRetryAt = performance.now() + 2000;
+  const generation = frameGeneration, stream = streamId;
+  try {
+    const result = await app.callServerTool({
+      name: 'pua_screen_action', arguments: { action: 'viewport' },
+    }, { timeout: ACTION_TIMEOUT });
+    const data = result.structuredContent as Partial<Preview> | undefined;
+    if (visible() && generation === frameGeneration && stream === streamId
+        && !result.isError && validSize(data?.viewport)) viewport = data.viewport;
+  } catch { /* Keep input disabled until geometry can be verified by a later poll. */ }
+}
+function canPoint() {
+  return visible() && !acting && root.dataset.live === 'live' && root.dataset.inputBusy !== 'true'
+    && !failedFrame && !image.hidden && !!image.src && validSize(viewport) && validSize(dimensions)
+    && Number.isFinite(decodedAt) && performance.now() < freshUntil
+    && Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01;
+}
+function pointerPoint(event: MouseEvent): Point | undefined {
+  if (!viewport || !dimensions) return;
+  const rect = screen.getBoundingClientRect();
+  const scale = Math.min(rect.width / dimensions.width, rect.height / dimensions.height);
+  const width = dimensions.width * scale, height = dimensions.height * scale;
+  const x = event.clientX - rect.left - (rect.width - width) / 2;
+  const y = event.clientY - rect.top - (rect.height - height) / 2;
+  if (width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height) return;
+  return { x: x / width * viewport.width, y: y / height * viewport.height };
+}
+function cancelPointer() {
+  const current = pointer;
+  pointer = undefined;
+  if (current && screen.hasPointerCapture(current.id)) screen.releasePointerCapture(current.id);
+}
+function pointerDown(event: PointerEvent) {
+  if (!event.isPrimary) { cancelPointer(); return; }
+  if (event.button !== 0 || !canPoint()) return;
+  const point = pointerPoint(event);
+  if (!point || !viewport) return;
+  event.preventDefault();
+  pointer = { id: event.pointerId, point, client: { x: event.clientX, y: event.clientY },
+    at: performance.now(), generation: frameGeneration, stream: streamId, size: { ...viewport }, moved: false };
+  screen.setPointerCapture(event.pointerId);
+}
+function pointerMove(event: PointerEvent) {
+  if (pointer?.id === event.pointerId && Math.hypot(event.clientX - pointer.client.x, event.clientY - pointer.client.y) > 6) pointer.moved = true;
+}
+function pointerUp(event: PointerEvent) {
+  const start = pointer;
+  if (!start || start.id !== event.pointerId) return;
+  pointerMove(event);
+  const end = pointerPoint(event);
+  cancelPointer();
+  if (!end || !canPoint() || start.generation !== frameGeneration || start.stream !== streamId
+      || start.size.width !== viewport?.width || start.size.height !== viewport?.height) return;
+  // Long presses and looped drags are deliberately not converted into surprise taps.
+  if (!start.moved && performance.now() - start.at > 700) return;
+  if (start.moved && Math.hypot(end.x - start.point.x, end.y - start.point.y) < 3) return;
+  void sendPointer({ action: start.moved ? 'drag' : 'tap', x: start.point.x, y: start.point.y,
+    width: start.size.width, height: start.size.height,
+    ...(start.moved ? { to_x: end.x, to_y: end.y, duration: Math.max(.05, Math.min(1, (performance.now() - start.at) / 1000)) } : {}) });
+}
+async function sendPointer(args: Record<string, string | number>) {
+  acting = true;
+  syncTools();
+  try {
+    const result = await app.callServerTool({ name: 'pua_screen_action', arguments: args }, { timeout: ACTION_TIMEOUT });
+    const data = result.structuredContent as { error?: { code?: string; uncertain?: boolean } } | undefined;
+    if (result.isError || data?.error) notify(data?.error?.uncertain ? '操作结果不确定，请查看手机后再操作' : FAILED[data?.error?.code ?? ''] ?? '操作未完成，请查看手机状态', true);
+  } catch {
+    notify('操作结果不确定，请查看手机后再操作', true);
+  } finally {
+    acting = false;
+    freshUntil = -Infinity; // Require another fresh stream heartbeat before the next gesture.
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    syncTools();
+    schedule(0);
+  }
+}
+// A trackpad emits many wheel events, including momentum after fingers lift.
+// Send one bounded phone swipe per burst; never queue the remaining events.
+let wheelAt = -Infinity;
+let wheelX = 0, wheelY = 0;
+let wheelConsumed = false;
+let wheelGeneration = 0;
+function wheel(event: WheelEvent) {
+  const now = performance.now();
+  if (now - wheelAt > 180) {
+    wheelX = wheelY = 0;
+    wheelConsumed = false;
+    wheelGeneration = frameGeneration;
+  }
+  wheelAt = now;
+  if (event.ctrlKey || event.metaKey) { wheelConsumed = true; return; } // pinch/zoom belongs to the host
+  event.preventDefault();
+  if (wheelConsumed) return;
+  if (pointer || !canPoint() || wheelGeneration !== frameGeneration || !pointerPoint(event) || !viewport) {
+    wheelConsumed = true;
+    return;
+  }
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? screen.getBoundingClientRect().height : 1;
+  if (!Number.isFinite(event.deltaX) || !Number.isFinite(event.deltaY)) { wheelConsumed = true; return; }
+  wheelX += event.deltaX * unit;
+  wheelY += event.deltaY * unit;
+  if (Math.max(Math.abs(wheelX), Math.abs(wheelY)) < 24) return;
+  wheelConsumed = true;
+  const horizontal = Math.abs(wheelX) > Math.abs(wheelY);
+  const size = viewport;
+  // Positive wheel delta scrolls content forward: the finger travels up/left.
+  // Use the center so hovering near an edge cannot clip the phone gesture.
+  const dx = horizontal ? -Math.sign(wheelX) * size.width * .65 : 0;
+  const dy = horizontal ? 0 : -Math.sign(wheelY) * size.height * .45;
+  void sendPointer({ action: 'drag', x: size.width / 2 - dx / 2, y: size.height / 2 - dy / 2,
+    to_x: size.width / 2 + dx / 2, to_y: size.height / 2 + dy / 2,
+    width: size.width, height: size.height, duration: .15 });
+}
+screen.addEventListener('wheel', wheel, { passive: false });
+const pointerHandlers = { pointerdown: pointerDown, pointermove: pointerMove, pointerup: pointerUp,
+  pointercancel: cancelPointer, lostpointercapture: cancelPointer };
+for (const [name, handler] of Object.entries(pointerHandlers)) screen.addEventListener(name, handler as EventListener);
+screen.title = '点击操作手机；拖动或触控板双指滑动来滚动、翻页';
+
 const toolHandlers = (Object.keys(tools) as ToolName[]).map(name => {
   const handler = () => { void act(name); };
   tools[name].addEventListener('click', handler);
@@ -441,6 +593,8 @@ const toolHandlers = (Object.keys(tools) as ToolName[]).map(name => {
 });
 
 function visibilityChanged() {
+  wheelConsumed = true;
+  cancelPointer();
   root.dataset.pageVisible = String(visible());
   if (!visible()) {
     if (timer) clearTimeout(timer);
@@ -455,10 +609,9 @@ function visibilityChanged() {
 
 const resizeObserver = new ResizeObserver(fitFrame);
 resizeObserver.observe(stage);
-image.onload = () => {
-  if (dimensions && image.src) lastGoodFrame = { source: image.src, size: dimensions };
-};
 image.onerror = () => {
+  failedFrame = true;
+  decodedAt = -Infinity;
   if (disposed || root.dataset.live === 'paused' || !image.src) return;
   if (lastGoodFrame && image.src !== lastGoodFrame.source) {
     image.src = lastGoodFrame.source;
@@ -497,6 +650,9 @@ function dispose() {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = undefined;
   toast.hidden = true;
+  cancelPointer();
+  screen.removeEventListener('wheel', wheel);
+  for (const [name, handler] of Object.entries(pointerHandlers)) screen.removeEventListener(name, handler as EventListener);
   for (const [name, handler] of toolHandlers) tools[name].removeEventListener('click', handler);
   clearFrame();
   resizeObserver.disconnect();

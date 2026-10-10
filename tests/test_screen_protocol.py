@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -134,8 +135,9 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertEqual(tools["pua_screen"]["_meta"]["openai/ui"]["entrypoints"], [{"type": "thread"}])
         for name in ("pua_screen_frame", "pua_screen_action"):
             self.assertEqual(tools[name]["_meta"]["ui"]["visibility"], ["app"])
-        self.assertEqual(tools["pua_screen_action"]["inputSchema"]["properties"]["action"]["enum"], ["refresh", "home", "screenshot"])
-        self.assertFalse(tools["pua_screen_action"]["annotations"]["destructiveHint"])
+        self.assertEqual(tools["pua_screen_action"]["inputSchema"]["properties"]["action"]["enum"], ["refresh", "home", "screenshot", "tap", "drag", "viewport"])
+        self.assertTrue(tools["pua_screen_action"]["annotations"]["destructiveHint"])
+        self.assertFalse(tools["pua_screen_action"]["annotations"]["idempotentHint"])
         visible = [item for item in tools.values()
                    if item.get("_meta", {}).get("ui", {}).get("visibility") != ["app"]]
         self.assertEqual(len(visible), 17)
@@ -362,6 +364,68 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertFalse(screen.is_paused)
         self.assertEqual(client.actions(),[])
 
+    def test_viewport_recovery_refreshes_cached_geometry_without_a_gesture(self):
+        runtime, client, screen = self.runtime()
+        runtime.phone.viewport()
+        client.size = {"width": 844, "height": 390}
+        result = runtime.call("pua_screen_action", {"action": "viewport"})
+        self.assertEqual(result["viewport"]["width"], 844)
+        self.assertIn(("viewport", client.size), screen.events)
+        self.assertEqual(client.actions(), [])
+        screen.set_paused(True)
+        with self.assertRaises(WDAError) as caught:
+            runtime.call("pua_screen_action", {"action": "viewport"})
+        self.assertEqual(caught.exception.code, "preview_paused")
+
+    def test_pointer_actions_map_exact_points_and_invalidate_model_focus(self):
+        runtime, client, screen = self.runtime()
+        runtime.phone.pending_input = {"token": "old"}
+        args = dict(action="tap", x=100, y=200, width=390, height=844)
+        self.assertTrue(runtime.call("pua_screen_action", args)["ok"])
+        self.assertEqual(client.actions()[-1], ("POST", "/actions", {"actions":[{
+            "type":"pointer","id":"preview-finger","parameters":{"pointerType":"touch"},
+            "actions":[{"type":"pointerMove","duration":0,"origin":"viewport","x":100,"y":200},
+                       {"type":"pointerDown","button":0},{"type":"pause","duration":50},
+                       {"type":"pointerUp","button":0}]}]}))
+        self.assertIn(("tap", {"viewport":{"width":390,"height":844},"point":{"x":100,"y":200}}),screen.events)
+        self.assertIsNone(runtime.phone.pending_input)
+        args.update(action="drag", to_x=120, to_y=500, duration=.25)
+        runtime.call("pua_screen_action", args)
+        self.assertEqual(client.actions()[-1], ("POST", "/wda/dragfromtoforduration",
+                         {"fromX":100,"fromY":200,"toX":120,"toY":500,"duration":.25}))
+        self.assertEqual(len(client.actions()), 2)
+
+    def test_pointer_rejects_paused_locked_rotated_outside_and_malformed_input(self):
+        for change, code in [("paused", "preview_paused"), ("locked", "phone_locked"),
+                             ("rotated", "stale_viewport"), ("outside", "invalid_argument"),
+                             ("extra", "invalid_argument"), ("nan", "invalid_argument")]:
+            runtime, client, screen = self.runtime()
+            args = dict(action="tap", x=100, y=200, width=390, height=844)
+            if change == "paused":screen.is_paused = True
+            if change == "locked":client.locked = True
+            if change == "rotated":args["width"] = 844
+            if change == "outside":args["x"] = 390
+            if change == "extra":args["to_x"] = 12
+            if change == "nan":args["x"] = float("nan")
+            with self.subTest(change=change), self.assertRaises(WDAError) as caught:
+                runtime.call("pua_screen_action", args)
+            self.assertEqual(caught.exception.code, code)
+            self.assertFalse(client.actions())
+
+    def test_pointer_busy_and_uncertain_mutation_are_never_replayed(self):
+        runtime, client, screen = self.runtime()
+        args = dict(action="tap", x=100, y=200, width=390, height=844)
+        with (runtime.state_dir / "operation.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(WDAError) as caught:runtime.call("pua_screen_action", args)
+            self.assertEqual(caught.exception.code, "device_busy")
+        self.assertFalse(client.calls)
+        with patch.object(runtime.phone, "post", side_effect=WDAError("pua_unreachable", "timeout")) as post:
+            with self.assertRaises(WDAError) as caught:runtime.call("pua_screen_action", args)
+            self.assertTrue(caught.exception.details["uncertain"])
+            post.assert_called_once()
+        self.assertEqual(screen.events[-1][0], "end")
+
     def toolbar(self, runtime):
         """Route the toolbar's own short-lived connection to a synthetic phone."""
         phone = FakeWDA()
@@ -459,6 +523,32 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertTrue(refused["isError"])
         self.assertEqual(refused["structuredContent"]["error"]["code"], "preview_paused")
         self.assertEqual(len(runtime.responses), 0)
+
+    def test_slow_screen_action_does_not_block_frames_or_queue_more_input(self):
+        started, polled = threading.Event(), threading.Event()
+        runtime = Mock()
+        def call(name, args):
+            if name == "pua_screen_action":
+                started.set()
+                if not polled.wait(2):
+                    raise AssertionError("frame polling blocked by action")
+                return {"ok": True}
+            polled.set()
+            return {"frame": None}
+        runtime.call.side_effect = call
+        def requests():
+            for ident, name in [(1,"pua_screen_action"),(2,"pua_screen_action"),(3,"pua_screen_frame")]:
+                yield json.dumps({"jsonrpc":"2.0","id":ident,"method":"tools/call",
+                                  "params":{"name":name,"arguments":{"action":"tap","x":100,"y":200,"width":390,"height":844} if ident < 3 else {}}}) + "\n"
+                if ident == 1:self.assertTrue(started.wait(2))
+        output = io.StringIO()
+        with patch.object(sys,"stdin",requests()), contextlib.redirect_stdout(output):
+            serve(runtime)
+        responses = {r["id"]:r["result"] for r in map(json.loads,output.getvalue().splitlines())}
+        self.assertTrue(responses[1]["structuredContent"]["ok"])
+        self.assertEqual(responses[2]["structuredContent"]["error"]["code"],"device_busy")
+        self.assertIn(3,responses)
+        self.assertEqual(runtime.call.call_count,2)
 
     def test_header_gets_only_the_model_name_looked_up_once(self):
         runtime, client, screen = self.runtime()
