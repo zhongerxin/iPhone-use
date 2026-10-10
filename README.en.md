@@ -1,5 +1,7 @@
 # iPhone Use
 
+> Windows users: this fork includes an experimental [Windows USB + MCP adapter](windows/README.md). The original macOS plugin remains at the repository root.
+
 [中文](README.md) · **English**
 
 ![iPhone Use controlling a real iPhone in Codex with a live screen preview](assets/iphone-use-demo.png)

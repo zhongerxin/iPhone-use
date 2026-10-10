@@ -2,6 +2,8 @@
 
 **中文** · [English](README.en.md)
 
+> Windows 用户：此 fork 提供实验性 [Windows USB + MCP 适配](windows/README.md)。原版 macOS 插件保留在仓库根目录。
+
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 
 让 Codex 通过 USB 操作你的真实 iPhone。用自然语言描述任务，Codex 就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。
