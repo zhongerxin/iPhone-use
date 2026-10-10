@@ -128,7 +128,7 @@ class ScreenProtocolTests(unittest.TestCase):
         ])
         self.assertIn("resources", responses[0]["result"]["capabilities"])
         tools = {item["name"]: item for item in responses[1]["result"]["tools"]}
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 20)
         for name in ("pua_ready", "pua_screen"):
             self.assertEqual(tools[name]["_meta"]["ui"]["resourceUri"], SCREEN_URI)
         self.assertEqual(tools["pua_screen"]["_meta"]["openai/ui"]["entrypoints"], [{"type": "thread"}])
@@ -138,7 +138,7 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertFalse(tools["pua_screen_action"]["annotations"]["destructiveHint"])
         visible = [item for item in tools.values()
                    if item.get("_meta", {}).get("ui", {}).get("visibility") != ["app"]]
-        self.assertEqual(len(visible), 17)
+        self.assertEqual(len(visible), 18)
         self.assertTrue(tools["pua_screen_frame"]["annotations"]["readOnlyHint"])
 
     def test_stdio_serves_packaged_widget_without_connecting_to_wda(self):

@@ -125,7 +125,7 @@ These changes reduce duplicate requests and model round trips. Overall task spee
 
 ## Tools
 
-There are 17 model tools and 2 additional widget-only tools.
+There are 18 model tools and 2 additional widget-only tools.
 
 | Tools | Purpose |
 | --- | --- |
@@ -172,3 +172,7 @@ This project relies on the [Appium](https://github.com/appium/appium) ecosystem 
 Thanks to the maintainers and contributors of Appium, WebDriverAgent, and related projects for making real iPhone automation possible.
 
 MIT License. See [third-party notices](THIRD_PARTY_NOTICES.md).
+
+## Optional Jev execution
+
+`pua_jev` runs a bounded navigation/search/draft loop in one tool call. One TypeSafe request chooses the operation and observed target together. Set `TYPESAFE_API_KEY` or save a private `jev.json` with `{"api_key":"your key"}` in the runtime state directory (mode `600`). Obtain READY first. Visible accessibility text and the goal are sent to TypeSafe; credentials stay outside the repository. Supply literal input through `texts`; use `dry_run=true` for a decision without execution. See [Jev integration](skills/iphone-use/references/jev.md).

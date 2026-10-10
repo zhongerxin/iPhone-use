@@ -127,7 +127,7 @@ sh scripts/install.sh
 
 ## 工具概览
 
-模型可用 17 个工具，另有 2 个仅供屏幕 widget 使用的工具。
+模型可用 18 个工具，另有 2 个仅供屏幕 widget 使用的工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -140,6 +140,16 @@ sh scripts/install.sh
 | `pua_screen`、`pua_metrics` | 预览开关与有界耗时统计 |
 
 界面异常时先返回截图，再由模型判断下一步：滚动查找一次最多滑一次，仍找不到可点击目标就暂停；遮挡、滚动无进展、输入不符或预期页面未出现也走截图兜底。已有截图直接复用，不自动继续盲滑或重放操作。
+
+## Jev 快速执行（可选）
+
+`pua_jev` 在一次工具调用内循环读取控件、选择动作和目标并执行，适合未知路径的导航、搜索与草稿输入。它使用 [TypeSafe Jev](https://docs.typesafe.ai/api)，会向 TypeSafe 发送当前可见控件文字与任务目标；常规工具继续在本地执行。先完成 READY，再调用：
+
+```sh
+python3 scripts/phone.py pua_jev '{"goal":"打开关于本机页面，不更改设置","max_steps":8,"expect":{"label":"序列号"}}'
+```
+
+配置 `TYPESAFE_API_KEY` 环境变量，或在本机运行目录创建权限为 `600` 的 `jev.json`，内容为 `{"api_key":"你的密钥"}`。密钥不进入仓库、日志或发布包。默认模型 `jev-latest`，可用 `TYPESAFE_MODEL` 固定版本。输入文字通过 `texts` 提供；`dry_run=true` 只选择、不操作。完成条件、速度测量与异常处理见 [Jev 接入说明](skills/iphone-use/references/jev.md)。
 
 ## 本机数据与升级
 

@@ -93,7 +93,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(len(replies), 4)
         self.assertTrue(all('error' not in reply for reply in replies), str([r.get('error') for r in replies]))
         self.assertEqual(replies[0]['result']['serverInfo']['version'], version)
-        self.assertEqual(len(replies[1]['result']['tools']), 19)
+        self.assertEqual(len(replies[1]['result']['tools']), 20)
         uri = replies[2]['result']['resources'][0]['uri']
         read = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'resources/read', 'params': {'uri': uri}}) + '\n'
         process = subprocess.run([sys.executable, str(rebuilt / 'server/iphone_use.py')], input=read, capture_output=True, text=True, timeout=15, check=True)

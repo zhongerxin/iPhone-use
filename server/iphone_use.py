@@ -90,6 +90,14 @@ SCHEMAS={
 # Each batch operation carries the same closed argument schema as its standalone tool.
 BATCH_OPS=["tap","swipe","type_text","launch_app","press_button","wait","observe","scroll_find"]
 SCHEMAS["batch"]=obj({"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"oneOf":[obj({"op":{"type":"string","const":op},"args":SCHEMAS[op]},("op","args")) for op in BATCH_OPS]}}},("steps",))
+SCHEMAS["jev"]=obj({
+ "goal":string("Concrete navigation, search or draft goal and stopping condition. Sends visible accessibility text to TypeSafe Jev.",max_length=2000),
+ "max_steps":{**num(1,20,"integer"),"default":8},
+ "timeout_seconds":{**num(1,60),"default":30},
+ "texts":{"type":"array","maxItems":20,"items":obj({"selector":SEL,"text":string("Exact single-line text for this observed editable field. Jev chooses a field; it does not generate text.",max_length=10000)},("selector","text"))},
+ "expect":SEL,
+ "dry_run":{"type":"boolean","default":False,"description":"Choose one action and target without executing."}
+},("goal",))
 SCHEMAS["ready"]["examples"]=[{"recover":True,"screenshot":False}]
 SCHEMAS["screen"]=obj({"action":string("Default open displays the live iPhone sidebar. Pause before password/Face ID takeover; resume only after the user confirms completion.",enum=["open","pause","resume"])})
 SCHEMAS["screen_frame"]=obj({"after_seq":num(0,9007199254740991,"integer"),"last_event_id":num(0,9007199254740991,"integer")})
@@ -98,22 +106,23 @@ SCHEMAS["screen_action"]=obj({"action":string("refresh reconnects the preview st
 APP_TOOLS=("screen_frame","screen_action")
 DESCRIPTIONS={
  "doctor":"Diagnose local Xcode, USB devices, signing prerequisites and PUA health without changing the phone. Start here for setup.",
- "setup":"First phone use in this chat: call setup(status) directly before READY; reuse an active start/recovery job, or start once with the existing config/build. Start waits up to 20 seconds for service readiness; if pending, query status with the same job_id and wait_seconds=20. Then READY. Missing config/source/build uses iphone-use-setup. No blanket reinstall or extra approval for authorized startup; honor no-restart instructions. Never uninstalls apps.",
- "ready":"First phone use in this chat: setup(status), reuse/start and wait, then READY (recover=true); only ready=true permits phone tasks. Reuse the healthy channel afterward. pua_unreachable/not_ready requires setup, not task failure. recover=true handles owned runtime faults, not cold startup. For recovering/recovery_required follow guidance. Never replay phone actions.",
- "observe":"Fresh phone controls and/or a screenshot, with the iPhone point viewport and an observation_id. Nodes: type without the XCUIElementType prefix; rect=[x,y,width,height] in points; an omitted name equals label, an omitted value repeats the text, omitted enabled/visible/in_viewport are true. A listed node is not proven hittable: fixed headers and overlays can cover it. The screenshot is scaled for reading: image pixels x image.pixel_to_point [x,y] = points.",
- "find":"Query selector fields or a PUA predicate directly without a whole tree. Returns matches in tree order with index, type, texts and rect; this tool's selector documents the fields every selector accepts.",
- "tap":"Tap the element a selector resolves to after on-screen and hittable checks, or tap point coordinates with optional contextual observation_id. If the selector fails, the error returns a screenshot and tap points: tap by x/y in the next call instead of trying other selectors. Executes once optimistically; expect opts into a postcondition. Request tree/both if the next decision needs the new page.",
+ "setup":'First phone use: setup(status), reuse an active job or start once with existing config/build. start waits up to 20s; if pending, status(job_id,wait_seconds=20), then READY. Missing config/source/build uses iphone-use-setup. Honor no-restart; never uninstall apps.',
+ "ready":'First phone use: setup(status), reuse/start and wait, then READY. Only ready=true permits tasks. Reuse the healthy channel. recover=true handles owned runtime faults; recovering/recovery_required follow guidance. pua_unreachable/not_ready requires setup. Never replay actions.',
+ "observe":'Fresh controls and/or screenshot with point viewport and observation_id. Nodes use short types and rect=[x,y,width,height]. Omitted name equals label; value repeats text; enabled/visible/in_viewport default true. Nodes may be occluded. Image pixels times image.pixel_to_point convert to points.',
+ "find":'Query selector fields or a predicate without a whole tree. Returns indexed matches, texts and rect. The selector schema documents the fields accepted everywhere.',
+ "tap":'Tap one fresh selector target after viewport/hittability checks, or x/y coordinates. Optional observation_id checks app/viewport. Selector failure returns screenshot and tap points: use x/y next. Default executes once; expect adds a postcondition, observe adds next-page context.',
  "swipe":"One gesture; default verify=false/observe=none skips XML checks. verify=true checks geometry once; failure returns a screenshot even with none/tree, without another gesture. Inspect it before acting; no progress does not prove list completeness.",
- "type_text":"Enter the full intended Unicode text into an editable nonsecure field; no short-text trial or mandatory readback. Omit selector to type into the field that already has keyboard focus, which is how to continue after a selector failed: tap the field by x/y, then type. Send the whole text in one call: long text is typed in bounded requests, and a result with input_complete=false returns a continue_token to pass alone in the next call, after which verify/submit/expect/observe run. verify=true opts into exact readback before submit; expect opts into a page postcondition. Newlines need explicit intent; submit defaults false. Never replay uncertain input/submission.",
- "press_button":"Home uses the dedicated PUA homescreen endpoint once; default skips foreground polling. verify=true checks SpringBoard for Home, expect can check a page. Volume effects cannot be semantically verified.",
- "launch_app":"Activate once using a resolved bundle ID, optimistically by default. verify=true polls foreground up to five seconds; expect checks the intended page. Request observation for the next decision. Never blindly replay uncertain activation.",
+ "type_text":'Enter full Unicode text into a nonsecure editable field. After coordinate focus omit selector. Long input returns continue_token: pass it alone until finished. Default verify=false, submit=false; verify opts into exact readback, expect into postcondition. Newlines require intent. Never replay uncertain input.',
+ "press_button":'Home uses the dedicated homescreen endpoint once; default skips polling. verify=true checks SpringBoard; expect checks a page. Volume changes have no semantic verification.',
+ "launch_app":'Activate a resolved bundle ID once; default verify=false skips polling. verify=true checks foreground, expect checks a page, observe returns next context. Never replay uncertain activation.',
  "wait":"Bounded semantic presence polling for expected target. Presence is a UI postcondition, not proof of business correctness.",
- "batch":"Up to 20 known steps in one model round trip. Routine unverified actions continue optimistically with intermediate observe=none. Stops on actual error, failed explicit check, uncertainty, submission without an explicit result expectation, unfinished long input (input_continues) or the per-call time budget (time_budget); continue from stopped_at without repeating completed steps. Observe the last step when the next decision needs page context.",
- "scroll_find":"Find a hittable target with at most one swipe. Ambiguity/occlusion stops immediately; an unresolved post-scroll query returns a screenshot. Inspect the end, region and overlays before deciding whether to swipe again; do not blindly repeat or raise the budget.",
- "collect_list":"Collect/deduplicate accessibility rows over bounded pages. Returns evidence and explicit coverage limits; always requires reconciliation before declaring business completeness.",
+ "batch":'Up to 20 known steps in one host round trip. Default actions run optimistically. Stops on error, uncertainty, failed explicit check, submit without expect, partial long input or time budget. Continue from stopped_at without repeating completed steps; observe the last step for new context.',
+ "scroll_find":'Find a hittable target with at most one swipe. Ambiguity or occlusion stops with a screenshot. An unresolved post-scroll target also returns a screenshot; inspect before continuing.',
+ "collect_list":'Collect and deduplicate accessibility rows over bounded pages. Reports evidence and coverage limits; reconcile scope and counts before claiming completeness.',
  "metrics":"In-process totals without text, app data or images: PUA HTTP time and bytes, tool time, response bytes per tool, and the wait between each response and the next tool request (host, model and user time). reset=true starts a new window."
 }
 DESCRIPTIONS["apps"]="Resolve a real bundle ID by installed-device inventory, bundled verified aliases, or Apple's Search API. Query app name before launch instead of guessing. Store metadata does not prove installation; check installed_verified and publisher/country."
+DESCRIPTIONS["jev"]='Bounded Jev navigation/search/draft loop; one request picks operation and observed target. Requires TYPESAFE_API_KEY or private jev.json and READY. Supply texts. Stops on auth, uncertainty or visual fallback; expect verifies a UI target. Host handles sends/payments/deletion.'
 READS={"doctor","observe","find","wait","metrics","apps"}
 READS.update(("screen","screen_frame"))
 DESCRIPTIONS["screen"]="Open or reuse the live iPhone screen in the Codex side panel. No phone actions or UI controls. Pause the preview before password/Face ID user takeover; resume after explicit completion. READY also opens or reuses this view by default."
@@ -142,7 +151,7 @@ def published_schema(name):
     """
     source=SCHEMAS[name]
     if name=="find":return source
-    brief=name=="batch"
+    brief=name in ("batch","jev")
     counts={"selector":0,"observe":0}
     def count(value):
         if value==SEL:counts["selector"]+=1
@@ -229,6 +238,10 @@ def validate_semantics(name,args):
     if name=="launch_app" and not re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+",args["bundle_id"]):raise WDAError("invalid_argument","Use the app's verified bundle ID.")
     if name=="batch":
         for step in args["steps"]:validate_semantics(step["op"],step["args"])
+    if name=="jev":
+        for entry in args.get("texts",[]):
+            predicate(entry["selector"])
+            validate_semantics("type_text",{"text":entry["text"]})
 
 
 def copy_png(directory,data):
@@ -280,6 +293,7 @@ class Runtime:
         self._replied_at=None
         self._device_lookup=None
         self.analytics=Analytics(self.state_dir,VERSION)
+        self._jev=None
 
     def call(self,name,args):
         started=time.monotonic();data=None;error=None
@@ -514,8 +528,12 @@ class Runtime:
                 if args.get("reset"):
                     self.client.clear_metrics();self.phone.tool_records.clear();self.responses.clear();self._replied_at=None
                 return result
-            if op in ("tap","swipe","type_text","launch_app","press_button","batch","scroll_find","collect_list"):
+            if op in ("tap","swipe","type_text","launch_app","press_button","batch","scroll_find","collect_list","jev"):
                 if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself before operations; observe again afterward.")
+            if op=="jev":
+                from jev_agent import JevAgent
+                if self._jev is None:self._jev=JevAgent(self)
+                return self._jev.run(**args)
             return getattr(self.phone,op)(**args)
         except WDAError as exc:
             error=exc.code
@@ -566,6 +584,7 @@ class Runtime:
     def replied(self):self._replied_at=time.monotonic()
 
     def close(self):
+        if self._jev is not None:self._jev.client.close()
         try:self.screen.close();self.client.close()
         finally:self.analytics.close()
 
