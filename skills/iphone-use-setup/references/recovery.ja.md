@@ -1,0 +1,11 @@
+# 操作接続の復旧
+
+PUAサービスは動作中だがXCTest接続が無効な場合に使う。サービス未起動はsetupスキルの初期化、署名・信頼・USBは[トラブルシューティング](troubleshooting.ja.md)に従う。
+
+XCTDaemonErrorDomain Code=41、Not authorized for performing UI testing actions、local.pid.0、pua_foreground_unavailableではstatus.ready=trueだけで操作可能と判断しない。selector変更では直らない。observeは読み取り専用を維持する。`pua_ready(screenshot=false)`は古いsessionと観察を消して1回読み直し、成功ならrecovery.state=read_recovered。継続する前面不良・XCTest認可エラーの場合だけサービスを復旧し、失敗した移動・入力・送信は繰り返さない。
+
+自動再起動は設定、endpoint、worker、実際の待受ポートの所有者を確認した本プラグインのサービスに限り、有効な対応ビルドを使う。recoveringならrecovery.job_idを記録し、statusのjobs配列から一致するidを追う。recovery_phaseはstopping → starting → serving。servingでREADYを再確認し、その観察から進捗を読む。startを重ねず、長期Runnerのsucceededを待たない。状態とログに応じて調べ、固定の15秒×20回ループや解析エラーの握りつぶしをしない。recover=falseは新しい再起動を行わないが、既存復旧ジョブは報告できる。errorなし・isError=falseでもREADYではない。
+
+recovery_required、reason=recovery_disabledは今回復旧を無効にした状態。ユーザーの指示が許す場合だけnext_tool／next_argumentsで再呼び出しする。明示的な禁止や読み取り専用なら制限を保って接続障害を報告する。復旧拒否、冷却、ロック、不明な障害はエラーとして扱う。
+
+pua_recovery_requiredではrecoveryの理由に従う。冷却は120秒で、retry_after_secondsと直近のログを確認する。外部PUA、所有者不明、ポート競合、ビルド不足は既存サービスを保持して具体的な手動手順を使う。必要な手動再起動はstatusで本プラグインのジョブの所有者を確認し、stop完了後にstartする。外部サービスは所有者が再起動する。ポート番号だけでプロセスを止めたり、実行ディレクトリを変えて検査を回避しない。再起動後も認可エラーなら、解除した端末のデベロッパモードやUIオートメーション設定を確認し、本人が信頼・認証を行う。

@@ -1,4 +1,5 @@
 import { App } from '@modelcontextprotocol/ext-apps';
+import { localize } from './localization';
 
 type Size = { width: number; height: number };
 type Point = { x: number; y: number };
@@ -76,17 +77,17 @@ const FRAME_INTERVAL = 250;
 const REQUEST_TIMEOUT = 3000;
 // A screenshot or Home may queue behind the phone operation already running.
 const ACTION_TIMEOUT = 12000;
-const LIVE_TEXT: Record<LiveState, string> = { connecting: '连接中', live: 'Live', paused: '已暂停', offline: '未连接' };
+const LIVE_TEXT: Record<LiveState, string> = { connecting: localize('连接中'), live: localize('Live'), paused: localize('已暂停'), offline: localize('未连接') };
 const EMPTY_TEXT: Record<EmptyState, string> = {
-  connecting: '正在连接', offline: '未连接', locked: '等待解锁',
-  authentication: '请完成认证', paused: '预览已暂停', unavailable: '画面暂不可用',
+  connecting: localize('正在连接'), offline: localize('未连接'), locked: localize('等待解锁'),
+  authentication: localize('请完成认证'), paused: localize('预览已暂停'), unavailable: localize('画面暂不可用'),
 };
-const DONE: Record<ToolName, string> = { refresh: '已刷新连接', home: '已回到主屏幕', screenshot: '截图已复制到剪贴板' };
+const DONE: Record<ToolName, string> = { refresh: localize('已刷新连接'), home: localize('已回到主屏幕'), screenshot: localize('截图已复制到剪贴板') };
 const FAILED: Record<string, string> = {
-  device_busy: '手机正在执行操作，请稍后再试',
-  preview_paused: '认证接管期间已暂停',
-  clipboard_unavailable: '截图未能写入剪贴板',
-  pua_unreachable: '未连接到手机',
+  device_busy: localize('手机正在执行操作，请稍后再试'),
+  preview_paused: localize('认证接管期间已暂停'),
+  clipboard_unavailable: localize('截图未能写入剪贴板'),
+  pua_unreachable: localize('未连接到手机'),
 };
 
 const validSize = (value: unknown): value is Size => {
@@ -314,10 +315,10 @@ function consume(value: unknown) {
   if (preview.paused === true) {
     clearFrame();
     setLive('paused');
-    liveText.textContent = preview.pause_reason === 'device_locked' ? '等待解锁' : LIVE_TEXT.paused;
+    liveText.textContent = preview.pause_reason === 'device_locked' ? localize('等待解锁') : LIVE_TEXT.paused;
     liveText.title = preview.pause_reason === 'device_locked'
-      ? '解锁 iPhone 后继续任务，或点击刷新恢复预览'
-      : '预览已暂停；完成手机认证后继续任务或点击刷新恢复画面';
+      ? localize('解锁 iPhone 后继续任务，或点击刷新恢复预览')
+      : localize('预览已暂停；完成手机认证后继续任务或点击刷新恢复画面');
     showEmpty(preview.pause_reason === 'device_locked' ? 'locked'
       : preview.pause_reason === 'authentication' ? 'authentication' : 'paused');
     return;
@@ -421,18 +422,18 @@ async function act(name: ToolName) {
     const data = result.structuredContent as (Partial<Preview> & { service_ready?: boolean; error?: { code?: string } }) | undefined;
     if (result.isError || data?.error) {
       if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
-      notify(FAILED[data?.error?.code ?? ''] ?? '操作未完成，请重试', true);
+      notify(FAILED[data?.error?.code ?? ''] ?? localize('操作未完成，请重试'), true);
     } else {
       // A refresh answers with the new stream identity; take the next frame at once.
       if (name === 'refresh') consume(data);
-      notify(name === 'refresh' && data?.service_ready === false ? '未连接到手机，请确认连接后重试' : DONE[name], name === 'refresh' && data?.service_ready === false);
+      notify(name === 'refresh' && data?.service_ready === false ? localize('未连接到手机，请确认连接后重试') : DONE[name], name === 'refresh' && data?.service_ready === false);
       if (timer) clearTimeout(timer);
       timer = undefined;
       schedule(0);
     }
   } catch {
     if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
-    notify('操作未完成，请重试', true);
+    notify(localize('操作未完成，请重试'), true);
   } finally {
     acting = false;
     delete tools[name].dataset.busy;

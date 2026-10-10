@@ -24,10 +24,12 @@ from wda_apps import AppCatalog
 from wda_screen import ScreenHub
 import wda_image
 from analytics import Analytics
+from localization import LANGUAGE, localize, instructions as localized_instructions
 
 PUAError=WDAError
 VERSION="0.3.10"
-SCREEN_URI="ui://iphone-use/phone-0.3.10.html"
+SCREEN_URI="ui://iphone-use/phone-"+VERSION+("-ja" if LANGUAGE=="ja" else "")+".html"
+SCREEN_ASSET="phone-screen.ja.html" if LANGUAGE=="ja" else "phone-screen.html"
 # Codex scopes reuse to the host, chat, server and UI resource. A stable result
 # ID keeps repeated READY/open/pause/resume calls in that chat on one panel,
 # including after the MCP process reconnects; no device identifiers are needed.
@@ -120,6 +122,11 @@ DESCRIPTIONS["screen"]="Open or reuse the live iPhone screen in the Codex side p
 DESCRIPTIONS["screen_frame"]="App-only cached live preview and action cursor events. Never reads XML, starts sessions or occupies the phone operation lock."
 DESCRIPTIONS["screen_action"]="App-only toolbar of the live preview, pressed by the user: refresh the preview stream, send the iPhone Home, or copy a screenshot to the Mac clipboard. Refused while the preview is paused for authentication."
 
+SEL=localize(SEL)
+OBS=localize(OBS)
+SCHEMAS=localize(SCHEMAS)
+DESCRIPTIONS=localize(DESCRIPTIONS)
+
 
 def undocumented(value):
     if isinstance(value,dict):return {k:undocumented(v) for k,v in value.items() if k not in ("description","examples")}
@@ -129,8 +136,8 @@ def undocumented(value):
 
 # Every selector has the same fields. pua_find publishes their documentation once; other
 # tools publish the same closed shape with one line pointing there.
-SEL_BRIEF={**undocumented(SEL),"description":"Selector; fields as documented on pua_find.selector."}
-OBS_BRIEF={**undocumented(OBS),"description":"Post-action output for the next decision; default none."}
+SEL_BRIEF={**undocumented(SEL),"description":localize("Selector; fields as documented on pua_find.selector.")}
+OBS_BRIEF={**undocumented(OBS),"description":localize("Post-action output for the next decision; default none.")}
 
 
 def published_schema(name):
@@ -171,7 +178,7 @@ for tool in TOOLS:
     if tool["name"] in ("pua_ready","pua_screen"):
         tool["_meta"]={"ui":{"resourceUri":SCREEN_URI}}
     if tool["name"]=="pua_screen":
-        tool.update(title="手机屏幕")
+        tool.update(title=localize("手机屏幕"))
         tool["_meta"]["openai/ui"]={"entrypoints":[{"type":"thread"}]}
         tool["annotations"].update(readOnlyHint=False,destructiveHint=False,idempotentHint=True)
     if tool["name"][len("pua_"):] in APP_TOOLS:tool["_meta"]={"ui":{"visibility":["app"]}}
@@ -619,6 +626,7 @@ INSTRUCTIONS=(
  "For App passwords or Face ID call pua_screen(action=pause); phone_locked already auto-pauses the preview for device unlock, so do not overwrite that reason with an extra pause. Pause phone calls and use the available host question tool (request_user_input_async in Default), first option exactly 已完成继续. Wait for the actual user answer; async return or preselection is not confirmation. After the actual user completion answer, explicitly pua_screen(action=resume) for App authentication or legacy/unknown pause, then read fresh state. For device unlock run READY once; successful READY clears only its matching device_locked pause. READY/open never clear App authentication or unknown pause. Continue remaining work from that fresh state. "
  "Operation action_complete/verified fields do not mean the user's entire task is complete. Track all deliverables, give commentary progress and continue tools while work remains; final only after completion or a concrete blocker. For an unavailable MCP binding use the skill's direct Runtime fallback with the same operation lock."
 )
+INSTRUCTIONS=localized_instructions(INSTRUCTIONS)
 
 
 def serve(runtime):
@@ -665,10 +673,10 @@ def serve(runtime):
                 elif method=="ping":result={}
                 elif method=="tools/list":result={"tools":TOOLS}
                 elif method=="resources/list":
-                    result={"resources":[{"uri":SCREEN_URI,"name":"iPhone Use Screen","title":"手机屏幕","mimeType":"text/html;profile=mcp-app","_meta":SCREEN_META}]}
+                    result={"resources":[{"uri":SCREEN_URI,"name":"iPhone Use Screen","title":localize("手机屏幕"),"mimeType":"text/html;profile=mcp-app","_meta":SCREEN_META}]}
                 elif method=="resources/read":
                     if params.get("uri")!=SCREEN_URI:raise WDAError("invalid_argument","Unknown screen resource URI.")
-                    html=(Path(__file__).resolve().parents[1]/"assets/phone-screen.html").read_text()
+                    html=(Path(__file__).resolve().parents[1]/"assets"/SCREEN_ASSET).read_text()
                     result={"contents":[{"uri":SCREEN_URI,"mimeType":"text/html;profile=mcp-app","text":html,"_meta":SCREEN_META}]}
                 elif method=="tools/call":
                     arrived=time.monotonic()

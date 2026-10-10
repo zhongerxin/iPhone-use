@@ -1,6 +1,6 @@
 # iPhone Use
 
-**中文** · [English](README.en.md)
+**中文** · [English](README.en.md) · [日本語](README.ja.md)
 
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 
@@ -78,6 +78,8 @@ sh scripts/install.sh
 源代码包解压后，也可以在包目录运行同一个安装脚本。安装完成后重连或新开 Codex 聊天。
 
 ### 连接自己的 iPhone
+
+需要日语插件说明、技能、工具指引和屏幕文字时，运行 `sh scripts/install.sh --language ja`。普通安装保留现有语言，也可用 `--language default` 显式选择；更新时沿用所选参数，然后重新连接聊天。详见[日语指南](README.ja.md)。
 
 在新聊天中启用 **iPhone Use**，输入：
 

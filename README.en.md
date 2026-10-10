@@ -1,6 +1,6 @@
 # iPhone Use
 
-[中文](README.md) · **English**
+[中文](README.md) · **English** · [日本語](README.ja.md)
 
 ![iPhone Use controlling a real iPhone in Codex with a live screen preview](assets/iphone-use-demo.png)
 
@@ -75,6 +75,8 @@ sh scripts/install.sh
 ```
 
 The installer validates and stages the source, registers a local Codex marketplace, installs the plugin and skills, and registers the installed server as standard MCP `iphone_use`. Plugin and standard configuration share the same namespace to avoid duplicate tools. An extracted source package uses the same installation command.
+
+For Japanese plugin descriptions, skills, tool guidance, and screen labels, run `sh scripts/install.sh --language ja`. The ordinary installation keeps the existing languages; `--language default` selects them explicitly. Reuse the chosen option when updating, then reconnect the chat. See the [Japanese guide](README.ja.md).
 
 Reconnect or start a new chat, enable **iPhone Use**, and ask:
 

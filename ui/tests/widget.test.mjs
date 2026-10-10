@@ -2,19 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { transform } from 'esbuild';
+import { build } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 
 const source = await readFile(new URL('../src/app.ts', import.meta.url), 'utf8');
-const { code } = await transform(`(async () => {
-${source.replace("import { App } from '@modelcontextprotocol/ext-apps';", 'const App = globalThis.MockApp;')}
-})()`, { loader: 'ts', target: 'es2022' });
+const codes = {};
+for (const language of ['default', 'ja']) {
+  const { outputFiles } = await build({
+    stdin: { contents: source.replace("import { App } from '@modelcontextprotocol/ext-apps';", 'const App = globalThis.MockApp;'),
+      loader: 'ts', resolveDir: fileURLToPath(new URL('../src/', import.meta.url)) },
+    bundle: true, format: 'esm', target: 'es2022', write: false,
+    define: { __IPHONE_USE_LANGUAGE__: JSON.stringify(language) },
+  });
+  codes[language] = `(async () => {\n${outputFiles[0].text}\n})()`;
+}
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 const preview = (fields = {}) => ({ server_time: 1000, frame: null, viewport: null, busy: false, paused: false, events: [], ...fields });
 // Fixtures exist only in this isolated DOM test, never in the shipped widget.
 const frame = (seq = 1) => ({ seq, data: 'test-image-only', mimeType: 'image/png', width: 900, height: 1800 });
 
-async function harness({ reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
+async function harness({ language = 'default', reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
   let now = 0;
   let timerId = 0;
   let instance;
@@ -73,7 +81,7 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
     addEventListener: (name, fn) => listeners.set(name, fn),
     removeEventListener: name => listeners.delete(name),
   };
-  await vm.runInNewContext(code, {
+  await vm.runInNewContext(codes[language], {
     MockApp, document,
     matchMedia: () => ({ matches: reducedMotion }),
     performance: { now: () => now },
@@ -108,6 +116,35 @@ test('connects before requesting only fullscreen, then polls only the app frame 
   assert.equal(JSON.stringify(h.calls[0].arguments), '{"after_seq":0,"last_event_id":0}');
   assert.equal([...h.timers.values()][0].delay, 250);
   assert.equal(h.requestOptions[0].timeout, 3000);
+});
+
+test('Japanese status and authentication text are confined to the selected build', async () => {
+  const normal = await harness();
+  const japanese = await harness({ language: 'ja' });
+  assert.equal(normal.elements['empty-state-text'].textContent, '正在连接');
+  assert.equal(japanese.elements['empty-state-text'].textContent, '接続しています');
+  for (const [fields, defaultLabel, japaneseLabel] of [
+    [{ frame_available: false }, '正在连接', '接続しています'],
+    [{ frame_available: false, service_ready: false }, '未连接', '未接続'],
+    [{ paused: true, pause_reason: 'device_locked' }, '等待解锁', 'ロック解除待ち'],
+    [{ paused: true, pause_reason: 'authentication' }, '请完成认证', '認証を完了してください'],
+    [{ paused: true }, '预览已暂停', 'プレビューは一時停止中です'],
+  ]) {
+    for (const h of [normal, japanese]) h.app.ontoolresult({ structuredContent: preview(fields) });
+    assert.equal(normal.elements['empty-state-text'].textContent, defaultLabel);
+    assert.equal(japanese.elements['empty-state-text'].textContent, japaneseLabel);
+  }
+  japanese.app.ontoolresult({ structuredContent: preview({ frame: frame(), frame_available: true }) });
+  assert.equal(japanese.elements['live-text'].textContent, 'ライブ');
+});
+
+test('Japanese toolbar reports outcomes without changing the action contract', async () => {
+  const h = await harness({ language: 'ja', reply: params => Promise.resolve(params.name === 'pua_screen_action'
+    ? { structuredContent: { ok: true, action: 'home' } } : { structuredContent: preview() }) });
+  h.elements['tool-home'].click();
+  await flush();
+  assert.equal(JSON.stringify(h.calls[0]), '{"name":"pua_screen_action","arguments":{"action":"home"}}');
+  assert.equal(h.elements.toast.textContent, 'ホーム画面に戻りました');
 });
 
 test('preserves full frame aspect ratio and maps gestures using the point viewport', async () => {
