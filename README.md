@@ -2,6 +2,8 @@
 
 **中文** · [English](README.en.md)
 
+> Windows 用户：先看 [中文上手教程](windows/QUICKSTART.zh-CN.md)，到 [Releases](https://github.com/jebhi/iPhone-use/releases) 下载带预编译安装器的 Windows ZIP，按 01～04 运行。实验性 Windows USB + MCP 适配不需要安装 CrossCode。原版 macOS 插件保留在仓库根目录。
+
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 
 让 Codex 通过 USB 操作你的真实 iPhone。用自然语言描述任务，Codex 就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。

@@ -1,0 +1,28 @@
+[package]
+name = "isideload"
+description = "Sideload iOS/iPadOS applications"
+license = "MPL-2.0"
+authors = ["Nicholas Sharp <nab@nabdev.me>"]
+version = "0.1.17"
+edition = "2024"
+repository = "https://github.com/nab138/isideload"
+documentation = "https://docs.rs/isideload"
+keywords = ["ios", "sideload"]
+readme = "../README.md"
+
+[features]
+default = []
+vendored-openssl = ["openssl/vendored", "zsign-rust/vendored-openssl"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+plist = { version = "1.7" }
+icloud_auth = { version = "0.1.5", package = "nab138_icloud_auth" }
+uuid = { version = "1.17.0", features = ["v4"] }
+zip = { version = "4.3", default-features = false, features = ["deflate"] }
+hex = "0.4"
+sha1 = "0.10"
+idevice = { version = "0.1.46", features = ["afc", "installation_proxy", "ring"], default-features = false }
+openssl = "0.10"
+zsign-rust = "0.1.6"
+thiserror = "2"
