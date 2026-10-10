@@ -77,7 +77,7 @@ for (const block of result.content ?? []) {
 
 直接用 `pua_type_text(selector, text)` 一次给出用户需要的完整内容，不先写测试短文本或 ASCII，也不自行拆段。selector 找不到输入框时不换写法重试：用坐标点中输入框，再调用不带 selector 的 `pua_type_text(text=...)` 向当前焦点输入。默认 `replace=true, allow_newlines=false, submit=false, verify=false, observe="none"`；普通搜索、筛选等输入后可接着做下一步，未知下一页面时在本次动作返回观察并顺带判断。需要保留已有草稿时按当前内容决定替换或追加；关键最终文本可显式 `verify=true` 核对完整字段。密码、手机解锁码和验证码由用户输入。
 
-长文本由工具分段输入。结果为 `input_complete=false` 时文本还没输完：只带返回的 `continue_token` 再调用一次 `pua_type_text`，不重发文本、不附其他参数，期间不要点击、滑动或切页；全部输完后原调用里的 verify / submit / expect / observe 才执行。续传失效（`input_continuation_expired`）时不会输入任何内容，先读取字段的实际文字，再用 `replace=false` 只补缺少的部分。输入中途报错附带 `characters_confirmed`，同样先回读，不整段重输。
+长文本由工具分段输入。结果为 `input_complete=false` 时文本还没输完：只带返回的 `continue_token` 再调用一次 `pua_type_text`，不重发文本、不附其他参数，期间不要点击、滑动或切页；全部输完后原调用里的 verify / submit / expect / observe 才执行。续传前会重新确认原 App、会话和输入框焦点；上下文变化或无法读取时使 token 失效，不自动切回或重输。续传失效（`input_continuation_expired`）时不会输入任何内容，先定位原本要输入的字段并读取实际文字，再用 `replace=false` 只补缺少的部分，不能向另一个 App 或输入框补写。输入中途报错附带 `characters_confirmed`，同样先回读，不整段重输。
 
 多行内容可能在聊天控件里触发 Return 发送。只有确知当前 TextView 是合适的多行编辑器时才设置 `allow_newlines=true`；不能暗中把用户要求的格式改成单行。允许换行不等于授权发送。用户已授权发送时，在发送前的一次观察或显式输入验收中核对目标会话和完整草稿，再发送一次；发送后核对最终内容和发送次数。`submit=true` 不证明提交结果，提交后以真实结果页 / 记录验收。明确未发送才补做，不根据 timeout、未单独验证或普通 `verified=false` 自动重发。
 
