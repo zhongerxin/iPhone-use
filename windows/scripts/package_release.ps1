@@ -10,6 +10,14 @@ if (Test-Path -LiteralPath $buildRoot) { throw 'Release staging directory alread
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'bin\wda-installer.exe'))) { throw 'Build the installer first.' }
 if (-not (Test-Path -LiteralPath $LicenseDirectory -PathType Container)) { throw 'Collect native dependency licenses before packaging.' }
 if (git -C $repositoryRoot status --porcelain --untracked-files=no) { throw 'Commit tracked source changes before packaging.' }
+foreach ($binary in @('wda-installer.exe','libgcc_s_seh-1.dll','libstdc++-6.dll','libwinpthread-1.dll')) {
+    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $projectRoot ('bin\'+$binary)))
+    $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+    $unicode = [System.Text.Encoding]::Unicode.GetString($bytes)
+    if ($ascii -match '(?i)[a-z]:[/\\]Users[/\\]' -or $unicode -match '(?i)[a-z]:[/\\]Users[/\\]') {
+        throw 'A release binary contains a local user profile path. Rebuild Rust and native libraries with portable paths before packaging.'
+    }
+}
 $packageRoot = Join-Path $buildRoot ('iphone-use-' + $Tag)
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 $sourceFiles = @(git -C $repositoryRoot ls-files windows)
