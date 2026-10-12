@@ -343,9 +343,9 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(not descendant["stdout"].strip() or descendant["stdout"].strip().startswith("Z"))
 
     def test_node_supported_matches_locked_dependency_engines(self):
-        for version in ("v20.19.0", "v20.20.1", "22.12.0", "v24.18.0", "v26.0.0"):
+        for version in ("v22.19.0", "v22.20.1", "v24.18.0", "v26.0.0"):
             self.assertTrue(wda_setup._node_supported(version))
-        for version in ("v18.20.0", "v20.18.1", "v21.9.0", "v22.11.0", "v23.0.0", "unknown"):
+        for version in ("v20.19.0", "22.12.0", "v22.18.0", "v18.20.0", "v20.18.1", "v21.9.0", "v22.11.0", "v23.0.0", "unknown"):
             self.assertFalse(wda_setup._node_supported(version))
 
     def recovery_fixture(self):

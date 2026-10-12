@@ -6,6 +6,8 @@ again with every later request. Scaling once here, to a size the common model li
 accept unchanged, keeps coordinates exact and removes most of the transferred bytes.
 """
 import os
+import datetime as dt
+import uuid
 from pathlib import Path
 import struct
 import subprocess
@@ -74,3 +76,21 @@ def model_image(source, quality=JPEG_QUALITY, timeout=10):
         except OSError:
             pass
         return source, "image/png", width, height
+
+
+def save_capture(state_dir, data):
+    """Store native evidence using one retention scheme for PUA and Midscene."""
+    artifacts = Path(state_dir) / "artifacts"
+    artifacts.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = artifacts / (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8] + ".png")
+    path.write_bytes(data)
+    path.chmod(0o600)
+    return path
+
+
+def prune_captures(state_dir):
+    artifacts = Path(state_dir) / "artifacts"
+    for pattern in ("*.png", "*.jpg"):
+        # mtime also ages out midscene-* files left by older plugin versions.
+        for old in sorted(artifacts.glob(pattern), key=lambda p: (p.stat().st_mtime_ns, p.name))[:-100]:
+            old.unlink(missing_ok=True)

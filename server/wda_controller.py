@@ -319,17 +319,13 @@ class PhoneController:
             fail("invalid_response", "Invalid screenshot encoding.")
         if not data.startswith(wda_image.PNG_SIGNATURE):
             fail("invalid_response","PUA screenshot is not PNG.")
-        artifacts=self.state_dir/"artifacts";artifacts.mkdir(mode=0o700,parents=True,exist_ok=True)
-        dest=artifacts/(dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")+"-"+uuid.uuid4().hex[:8]+".png")
-        dest.write_bytes(data);dest.chmod(0o600)
+        dest=wda_image.save_capture(self.state_dir,data)
         native=wda_image.png_size(data[:32])
         if native and (native[0]>native[1])!=(viewport["width"]>viewport["height"]):
             # The capture is turned the other way than the remembered viewport: the phone rotated.
             viewport.update(self.viewport())
         path,mime,width,height=wda_image.model_image(dest)
-        for pattern in ("*.png","*.jpg"):
-            for old in sorted(artifacts.glob(pattern))[:-100]:
-                old.unlink()
+        wda_image.prune_captures(self.state_dir)
         image={"path":str(path),"mimeType":mime}
         if width and height:
             image.update(width=width,height=height,pixel_to_point=[round(viewport["width"]/width,4),round(viewport["height"]/height,4)])

@@ -104,7 +104,7 @@ def _node_supported(version):
     if not match:
         return False
     major, minor, _ = map(int, match.groups())
-    return (major == 20 and minor >= 19) or (major == 22 and minor >= 12) or major >= 24
+    return (major == 22 and minor >= 19) or major >= 24
 
 
 def _diagnose(text):
@@ -282,7 +282,7 @@ class SetupManager:
         if not checks["full_xcode"]:
             next_steps.append("Install full Xcode, launch it to accept its license and install components, then select that Xcode with xcode-select.")
         if not checks["node"] or not checks["npm"]:
-            next_steps.append("Install Node.js 20.19+ / 22.12+ / 24+ with npm 10+ for the loopback USB forward.")
+            next_steps.append("Install Node.js 22.19+ / 24+ with npm 10+ for the loopback USB forward.")
         if not checks["configured"]:
             next_steps.append("Discover the device, then configure its explicit UDID, your Apple Team ID and a unique reverse-DNS bundle ID.")
         if config and not chosen:
@@ -466,7 +466,7 @@ class SetupManager:
                 if sys.platform != "darwin" or not all(shutil.which(name) for name in ("xcodebuild", "node", "npm")):
                     raise ValueError("Recovery requires macOS, full Xcode and supported Node.js / npm.")
                 if not _node_supported(_run(["node", "--version"])["stdout"]):
-                    raise ValueError("USB forwarding requires Node.js 20.19+ / 22.12+ / 24+; update Node.js before recovery.")
+                    raise ValueError("USB forwarding requires Node.js 22.19+ / 24+; update Node.js before recovery.")
                 target = targets[0]
                 snapshot = {key: target.get(key) for key in ("id", "pid", "owner_token", "worker_entrypoint")}
                 snapshot.update(config_fingerprint=_fingerprint(config), base_url=self.base_url)
@@ -704,7 +704,7 @@ class SetupManager:
                     if not shutil.which("node") or not shutil.which("npm"):
                         raise ValueError("Install supported Node.js and npm for the USB forward.")
                     if not _node_supported(_run(["node", "--version"])["stdout"]):
-                        raise ValueError("USB forwarding requires Node.js 20.19+ / 22.12+ / 24+; update Node.js before start.")
+                        raise ValueError("USB forwarding requires Node.js 22.19+ / 24+; update Node.js before start.")
                     with socket.socket() as probe:
                         # Node listeners use address reuse. A recently stopped
                         # owned forward can leave connections in TIME_WAIT;

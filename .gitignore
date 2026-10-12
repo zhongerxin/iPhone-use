@@ -6,6 +6,7 @@ node_modules/
 dist/
 .runtime/
 outputs/
+midscene_run/
 DerivedData/
 WebDriverAgent/
 *.xcresult

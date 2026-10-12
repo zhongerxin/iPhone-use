@@ -124,6 +124,17 @@ class AnalyticsTests(unittest.TestCase):
         with patch.object(runtime, "_dispatch", return_value=value), patch.object(runtime.analytics, "tool_result", side_effect=RuntimeError):
             self.assertIs(runtime.call("pua_type_text", {}), value)
 
+    def test_midscene_telemetry_is_bounded_and_records_failures(self):
+        analytics = self.analytics()
+        for code in (None, 'midscene_node_unsupported', 'midscene_failed', 'phone_locked', 'wait_timeout'):
+            analytics.tool_result('pua_midscene', {'text': 'private instruction'},
+                                  {'error': code, 'report': '/private/file'}, 42)
+        analytics.close()
+        events = [e['properties'] for e in self.events if e['event'] == 'iphone_use_tool_called']
+        self.assertEqual(len(events), 5)
+        self.assertEqual([e['error_code'] for e in events], ['none', 'midscene_node_unsupported', 'midscene_failed', 'phone_locked', 'wait_timeout'])
+        self.assertNotIn('private', json.dumps(events))
+
     def test_slow_network_and_full_queue_do_not_block_tools_or_close(self):
         waiting, release = threading.Event(), threading.Event()
         def slow(token, events):

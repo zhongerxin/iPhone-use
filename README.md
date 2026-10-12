@@ -12,6 +12,10 @@ iPhone Use 使用 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（W
 
 **使用前，需要先在你自己的 iPhone 上安装、签名并启动 WDA Runner。** WDA 是运行在手机上的执行服务；下面的提示词和 setup 流程可以让 Codex 协助完成首次安装，已有健康的 WDA 可直接复用。
 
+## 操作与报告示例
+
+查看[实测图集](docs/pr-showcase.md)：完整日历任务、原生时间滚轮微调、输入替换与清空，以及同一任务的 HTML 回放报告。示例来自已完成的模拟器测试。默认单步动作与报告无需额外模型授权；自动执行和视觉核验需单独通过 Sign in with ChatGPT 授权。
+
 ## 用一段提示词让 Codex 安装
 
 将下面这段话复制到本机 Codex：
@@ -47,7 +51,7 @@ https://github.com/zhongerxin/iPhone-use
 | 可在 Xcode 中使用的 Apple 账号和开发团队 | 签名手机端 WDA Runner |
 | USB 连接的真实 iPhone | 信任此 Mac，开启设备要求的开发者模式，安装与启动期间保持解锁 |
 | Python 3.9+ | 运行 MCP 服务；Python 端使用标准库 |
-| Node.js 20.19+、22.12+ 或 24+，npm 10+ | USB 转发与屏幕流；支持范围以项目 engines 和 doctor 检查为准 |
+| Node.js 22.19+，npm 10+（推荐 Node.js 24） | Midscene SDK、USB 转发与屏幕流 |
 
 Xcode 需要支持手机当前的 iOS 版本。无需越狱，也无需单独启动 Appium Server。WDA 固定使用已验证的 16.14.0 提交，下载、依赖安装、签名和构建由 setup 流程管理。
 
@@ -113,6 +117,24 @@ sh scripts/install.sh
 
 屏幕预览在同一聊天中复用已有 widget。底部提供刷新、主屏幕和截图按钮；无图像时保留黑色屏幕的 iPhone 外壳，屏幕内仅显示对应状态图标，顶部显示连接或暂停状态。预览供用户观看，模型定位仍以工具返回的实际图像或控件为依据。
 
+### 可选 Midscene：从报告到自动执行
+
+使用上只有一个 **Midscene 开关**，默认开启单步动作与报告；高级选项 **AI 自动执行**默认关闭，按需授权开启。直接在聊天中切换，设置会跨对话保存，用户不需要理解内部模式值：
+
+| 你的指令 | 设置 | 收益与影响 |
+|---|---|---|
+| “关闭 Midscene” | 关闭 | 保留原有操作流程，不生成 Midscene 报告 |
+| “开启 Midscene” | 开启（默认） | 当前聊天模型决策；记录操作、耗时及点击前后截图，方便回放和排查；不新增内部模型请求 |
+| “开启 Midscene AI 自动执行” | 开启高级选项 | 真正的 aiAct 多步执行和 aiAssert 视觉核验；需要单独授权，会产生额外模型调用 |
+
+正常使用即可积累操作报告，需要复盘时查看，再按需开启 AI。登录不会自动开启 AI；关闭不注销账号或删除报告。此前已关闭的用户可说“仅这次开启操作报告”，任务结束后恢复原模式。安装包仍包含 SDK 支持，开关控制执行路径。AI 模式不保证更快、更省用量或必然成功。
+
+助手会主动判断任务：遇到目标明确的跨页面操作或需要视觉断言的检查，会结合当前任务说明 AI 的具体收益和额外模型用量，提供“本次试用／保持当前方式／以后默认使用”的选择。简单操作直接完成，不插入推荐；断连和登录问题先正常处理。拒绝后本任务不再推荐，未回复也不会自动开启。本次试用结束后恢复原设置，并提供报告供用户评估效果。
+
+工具入口：`pua_midscene(action="settings")` 查看；附加 `mode="off" / "steps" / "ai"` 切换。
+
+`pua_midscene` 通过 Midscene iOS SDK 操作手机，并按 `report_id` 累积 HTML 报告。使用 `auth_login` 在 OpenAI 官方页面授权后，`act` / `assert` 调用真实的 aiAct / aiAssert，使用获准的 ChatGPT 套餐额度，无需 API Key。模型由账号可用列表选择，不继承当前聊天的模型和历史。未授权时保留当前聊天模型决策的明确动作模式。安装、授权与参数说明见 [Midscene 接入指南](skills/iphone-use/references/midscene.md)。
+
 ## 技术亮点
 
 - **本地 USB 通道。** Python MCP 服务通过本机 loopback 转发访问 WDA，运行数据和签名构建保留在本机。
@@ -127,7 +149,7 @@ sh scripts/install.sh
 
 ## 工具概览
 
-模型可用 17 个工具，另有 2 个仅供屏幕 widget 使用的工具。
+模型可用 18 个工具，另有 2 个仅供屏幕 widget 使用的工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -138,6 +160,7 @@ sh scripts/install.sh
 | `pua_type_text`、`pua_wait` | Unicode 输入与有界等待 |
 | `pua_batch`、`pua_scroll_find`、`pua_collect_list` | 组合动作、滚动查找与列表采集 |
 | `pua_screen`、`pua_metrics` | 预览开关与有界耗时统计 |
+| `pua_midscene` | Midscene 开关、可选操作及报告 |
 
 界面异常时先返回截图，再由模型判断下一步：滚动查找一次最多滑一次，仍找不到可点击目标就暂停；遮挡、滚动无进展、输入不符或预期页面未出现也走截图兜底。已有截图直接复用，不自动继续盲滑或重放操作。
 
@@ -179,3 +202,9 @@ python3 scripts/package.py
 感谢 Appium、WebDriverAgent 及相关项目的维护者和贡献者，让真实 iPhone 的自动化操作成为可能。
 
 MIT License。第三方组件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+AI 模式还支持 `pua_midscene(action="wait", text="页面条件", timeout_ms=15000)`，使用真正的 `aiWaitFor` 并合并到同一报告；仅在等待异步状态时调用，会产生额外模型请求。aiAct 的输入可按任务选择替换、清空或追加，仍限单行且不自动提交。默认单步模式和 Scroll 参数不变。
+
+当前试用版锁定 Midscene `1.15.2-beta-20261012093542.0`，包含输入框就绪检测、滚动安全、Swipe 时长规划、规划历史去重和相对距离换算；安装时从公开 npm 获取。该版本来自临时集成分支，固定版本号，不跟随浮动 beta 标签。距离转换由 SDK 的 AI 规划阶段执行；显式动作参数和 YAML 回放保持逻辑距离，插件不再重复转换。
+
+[SDK 拆分 PR 与依赖关系](https://github.com/web-infra-dev/midscene/pull/3236) · [集成版本发布记录](https://github.com/web-infra-dev/midscene/actions/runs/38221272475)

@@ -55,3 +55,7 @@ READY 已返回设备、会话、视口和当前 observation，复用这些信�
 Apple 的 [开发者账户说明](https://developer.apple.com/help/account/basics/about-your-developer-account)说明 Personal Team 最多可安装 3 个 App / 设备，provisioning profile 自签发起 7 天过期，届时需要重建重装。免费账户可用于个人设备测试，不能据此承诺永久运行。
 
 [Apple 开发者模式](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)与 [Appium 真机准备](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/device-setup/)提供配对、开发模式与签名要求。流程以当前 Xcode/iOS 的实际提示和工具诊断为准；本插件不要求越狱。
+
+## Midscene 执行依赖
+
+默认操作路径需要 Node.js 22.19+ 与插件目录的 Midscene SDK。`scripts/install.sh` 会安装 SDK；若工具提示缺少依赖，执行 `npm ci --prefix <plugin-root>/server/midscene` 后继续。无需配置外部模型或 API key，当前聊天模型负责看图与决策。
