@@ -38,6 +38,10 @@ https://github.com/zhongerxin/iPhone-use
 
 仓库目前为私有，需要有 GitHub 访问权限，或者使用已取得的源代码包。
 
+## Android 支持（实验版）
+
+新增独立的 **Android Use** 插件，支持 ADB + UI Automator、中文输入、批处理、列表采集及按需屏幕预览。三星 SM-G9500 / Android 9 已完成基础真机验证。安装入口为 `sh scripts/install_android.sh`，功能范围和限制见 [Android 文档](android/README.md)。
+
 ## 安装依赖
 
 | 依赖 | 用途 |
