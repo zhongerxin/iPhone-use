@@ -35,3 +35,16 @@ PUA 路径不依赖 Mac 的 iPhone 镜像窗口、显示器原点或镜像锁屏
 ## 镜像与 PUA 占用冲突
 
 `mirroring_conflict`、设置页空树或“正在从 Mac 使用此 iPhone”的锁屏截图：退出 Mac 的 iPhone 镜像，必要时用户解锁手机，重新调用 pua_ready。不要通过重复 launch、tap 或强制输入在空树状态继续任务。仅镜像进程存在不证明占用；工具在树为空且镜像运行时拒绝 READY。
+
+
+## 无线 XCTest 启动失败
+
+`paired / connected / localNetwork` 只证明 CoreDevice 连接状态，不证明 Runner 已取得 XCTest 配置或 WDA 已可控制。[#19](https://github.com/zhongerxin/iPhone-use/issues/19) 中的 `XCTestDriverInterface:XCTestManager_IDEInterface` 通道拒绝、`Failed to retrieve test configuration` 和 Runner 退出 74 发生在测试启动阶段。不要把 Runner 退出码与 xcodebuild 退出码混为一谈，也不要仅凭退出码归因于 VPN、签名或 iOS 版本。
+
+- 先查看同一 setup job 的状态及日志，保留首次错误前后的连续上下文。默认 20 秒 start 等待结束只返回当前状态，不会据此终止后台 XCTest；12 秒 HTTP 状态探测预算也不是 XCTest 启动期限。不要反复延长 HTTP 超时或自动重试启动来掩盖该故障。
+- 若已使用独立诊断补丁 #26，沿用其同一次失败的 `.xcresult`、`failure.json` 和 Xcode 会话日志，不要求重复安装。该补丁不属于本 PR 的依赖，也不是 code 74 的根因修复。优先核对 testmanagerd 控制会话、serialized transport handoff、proxy channel request、Runner ready、测试配置及首个拒绝事件的顺序。
+- 公开反馈只需脱敏后的相关连续片段；一致替换设备、会话及地址标识，保留时间戳和错误 Domain/Code，不上传整个原始结果包或账户资料。
+- 若用户愿意做网络对照，使用同一部失败手机的个人热点，保持构建、签名、系统及 VPN 配置不变；确认无旧活动工作后仅启动一次并查询同一 job。热点成功后切回原 Wi-Fi 复核。单次热点成功或失败都不足以排除 VPN 或确定根因。
+- 暂需使用手机时，可在用户接回 USB 后停止已确认归属的失败工作、重新启动并验证 READY；原有 USB XCTest 会话拔线后不保证存活。任何连接切换都不重放手机操作。
+
+目前该故障仍需受影响环境的证据定位；其他设备无线成功及本地回归测试通过均不能代替该环境的修复验收。

@@ -8,6 +8,8 @@ import sys
 import tempfile
 import time
 import unittest
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -29,6 +31,32 @@ class SetupTests(unittest.TestCase):
     def job(self, token="owned-marker", pid=12345):
         return {"id": "a" * 32, "action": "start", "state": "running", "pid": pid,
                 "owner_token": token, "created_at": "2026-10-06T00:00:00Z", "config": {}}
+
+    def test_status_probe_outlasts_usb_fallback_before_wireless_reply(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                # Reproduce a stalled USB attempt before the wireless connection answers.
+                time.sleep(5.1)
+                body = b'{"value":{"ready":true}}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.manager.base_url = "http://127.0.0.1:" + str(server.server_port)
+        opener = wda_setup.urllib.request.build_opener(wda_setup.urllib.request.ProxyHandler({}))
+        with patch("wda_setup.urllib.request.build_opener", return_value=opener), \
+             patch.object(opener, "open", wraps=opener.open) as request:
+            self.assertTrue(self.manager._probe_status()["ready"])
+        self.assertGreater(request.call_args.kwargs["timeout"], 5 + 3.5 + 2)
 
     def test_start_waits_for_service_without_creating_another_job(self):
         job = {"id": "a" * 32, "action": "start", "state": "running"}

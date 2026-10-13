@@ -294,6 +294,8 @@ class ScreenHubTests(unittest.TestCase):
             command = self.hub._command()
             self.assertEqual(command[-2:], ["TEST-DEVICE-1234", "9100"])
             self.assertEqual(Path(command[1]).read_bytes(), (ROOT / "tooling/screen-stream.mjs").read_bytes())
+            self.assertEqual((dependency.parent.parent / "device-transport.mjs").read_bytes(),
+                             (ROOT / "tooling/device-transport.mjs").read_bytes())
             self.assertNotIn("secret", Path(command[1]).read_text())
             self.assertEqual(os.stat(command[1]).st_mode & 0o777, 0o600)
         (self.directory / "config.json").write_text('{"udid":"TEST-DEVICE-1234", "mjpeg_device_port":"http://remote"}')
@@ -332,6 +334,7 @@ class NodeStreamTests(unittest.TestCase):
                 runtime = Path(temporary)
                 script = runtime / "screen-stream.mjs"
                 script.write_bytes((ROOT / "tooling/screen-stream.mjs").read_bytes())
+                (runtime / "device-transport.mjs").write_bytes((ROOT / "tooling/device-transport.mjs").read_bytes())
                 stub = runtime / "node_modules/appium-ios-device"
                 stub.mkdir(parents=True)
                 (stub / "package.json").write_text('{"type":"module","main":"index.js"}')

@@ -59,7 +59,7 @@ class PackagingTests(unittest.TestCase):
             rel = source.relative_to(ROOT)
             if source.is_file() and 'node_modules' not in rel.parts:
                 self.assertEqual((self.stage / rel).read_bytes(), source.read_bytes(), str(rel))
-        for name in ('assets/phone-screen.html', 'tooling/screen-stream.mjs', 'tooling/forward.mjs',
+        for name in ('assets/phone-screen.html', 'tooling/screen-stream.mjs', 'tooling/forward.mjs', 'tooling/device-transport.mjs',
                      'tooling/package-lock.json', 'scripts/phone.py', 'scripts/check_screen_ui.py'):
             self.assertEqual((self.stage / name).read_bytes(), (ROOT / name).read_bytes(), name)
         for document in list((self.stage / 'skills').rglob('*.md')) + [self.stage / 'README.md', self.stage / 'README.en.md', self.stage / 'CHANGELOG.md']:
