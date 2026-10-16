@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>iPhone 屏幕</title>
+  <style>
+    :root{color-scheme:light dark}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#f8f8f8}
+    @media (prefers-color-scheme:dark){html,body{background:#212121}}
+    iframe{display:block;width:100%;height:100%;border:0}
+    #notice{position:fixed;inset:0;display:none;place-items:center;font:500 13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",system-ui,sans-serif;color:#6e6e80;text-align:center;padding:24px}
+    body[data-failed] #notice{display:grid}
+    body[data-failed] iframe{display:none}
+  </style>
+</head>
+<body>
+  <iframe id="widget" title="iPhone 实时屏幕" sandbox="allow-scripts"></iframe>
+  <div id="notice" role="status">预览服务不可用，请让 Claude 重新打开手机屏幕。</div>
+  <script type="module">/*__SCRIPT__*/</script>
+</body>
+</html>

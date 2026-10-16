@@ -4,7 +4,7 @@
 
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 
-让 Codex、WorkBuddy 或豆包工作通过 USB 操作你的真实 iPhone。用自然语言描述任务，助手就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。
+让 Codex、Claude Code、WorkBuddy 或豆包工作通过 USB 操作你的真实 iPhone。用自然语言描述任务，助手就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并展示手机屏幕。
 
 iPhone Use 使用 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA）与 iPhone 通信，包含本地 MCP 服务、安装与使用技能，以及实时屏幕 widget。它优先复用现有连接与构建；控件定位失败时，指导模型查看截图并尝试坐标点击。
 
@@ -47,7 +47,7 @@ https://github.com/zhongerxin/iPhone-use
 
 安装插件后，当前聊天可能需要重新连接才能加载工具，流程可在重连后继续。Apple 账号登录、设备信任、开发者模式及手机解锁仍需本人在系统界面完成。
 
-仓库目前为私有，需要有 GitHub 访问权限，或者使用已取得的源代码包。
+也可以使用已取得的源代码包，在解压目录运行对应宿主的安装脚本。
 
 ## 在 WorkBuddy 和豆包工作中安装
 
@@ -102,11 +102,52 @@ https://github.com/zhongerxin/iPhone-use
 
 如果工具没有加载，先确认连接器已启用，再新开会话 / 本地电脑任务。两个宿主同时使用同一部手机时，按共享操作锁的提示等待，避免同时操作。详细安装、更新和排查步骤见上表链接。
 
+## 在 Claude Code 中安装
+
+Claude Code 版共用现有 MCP 服务、技能、设备配置、WDA 构建和操作锁，已配置过的手机优先复用。依赖与下表相同，另需已登录且支持插件的 Claude Code CLI；无需 Codex CLI。桌面端在 **Code 标签页的本地（Local）会话**中使用，实时画面显示在右侧浏览器面板；终端 CLI 可在本机浏览器中查看。
+
+### 发给 Claude Code 的提示词
+
+```text
+请在这台 Mac 上安装 iPhone Use，让 Claude Code 通过 USB 操作我的真实 iPhone：
+https://github.com/zhongerxin/iPhone-use
+
+先读取 README.md、claude/README.md 和 scripts/install_claude.sh，检查已登录的
+Claude Code CLI、Python、Node.js、npm、完整 Xcode 和 USB iPhone。
+克隆或复用本地源码，保留已有改动，在源码根目录运行 sh scripts/install_claude.sh。
+用 claude plugin list --json 确认 iphone-use@iphone-use-local 已安装。
+安装后新开 Claude Code 会话，或执行 /reload-plugins；如果当前会话无法加载新工具，
+说明需要我完成的步骤，等我完成后继续。桌面端使用 Code 标签页的本地（Local）会话。
+
+工具可用后读取 iphone-use-claude 和 iphone-use-setup，先查询 setup status，
+复用已有配置、健康 WDA 或正在运行的启动任务；首次配置使用我自己的设备、
+Apple 开发团队和可签名 bundle ID，获取固定版本 WDA、构建并启动。
+确认 pua_ready 返回 ready=true 后显示手机屏幕，再在 iPhone 计算器中验证 12×34=408。
+支持钩子的桌面端会自动打开或复用预览；收到自动打开提示时不要重复启动。
+未自动打开时按 iphone-use-claude 的指引启动查看服务，并打开返回的完整 url。
+浏览器面板被收起时提示我展开；终端 CLI 则把预览地址交给我在本机浏览器打开。
+
+Apple 登录、设备信任、开发者模式、密码或 Face ID 需要我接管时，
+说明具体步骤并等我完成；不要照搬作者的设备标识或签名信息。
+```
+
+### 手动安装
+
+在源码根目录运行：
+
+```sh
+sh scripts/install_claude.sh
+```
+
+脚本在用户范围注册本地 marketplace `iphone-use-local` 并安装 `iphone-use@iphone-use-local`。安装后新开 Claude Code 会话或执行 `/reload-plugins`。请保留暂存目录 `dist/claude/`，更新源码后重新运行安装脚本；Codex 与 Claude 共用同一台设备，应避免同时操作。
+
+权限设置、手动预览命令、认证接管、更新和卸载方式，见 [Claude Code 使用说明](claude/README.md)。
+
 ## 安装依赖
 
 | 依赖 | 用途 |
 | --- | --- |
-| macOS 与 Codex、WorkBuddy 或豆包工作 | 运行本地 MCP 服务与屏幕侧边栏；Codex 版安装另需 Codex CLI |
+| macOS 与 Codex、Claude Code、WorkBuddy 或豆包工作 | 运行本地 MCP 服务与手机预览；Codex / Claude 版安装另需各自的 CLI |
 | 完整 Xcode，已完成首次启动配置 | 编译、签名、部署和运行 WDA；仅 Command Line Tools 不够 |
 | 可在 Xcode 中使用的 Apple 账号和开发团队 | 签名手机端 WDA Runner |
 | USB 连接的真实 iPhone | 信任此 Mac，开启设备要求的开发者模式，安装与启动期间保持解锁 |

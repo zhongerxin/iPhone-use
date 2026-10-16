@@ -1,0 +1,18 @@
+{
+  "name": "iphone-use",
+  "description": "让 Claude Code 通过 USB 操作真实 iPhone，支持引导安装、App 自动化和截图回退。本对话首次使用先 setup 复用或启动服务，等待就绪后再 READY。",
+  "author": {
+    "name": "ZHONG XIN"
+  },
+  "homepage": "https://github.com/zhongerxin/iPhone-use",
+  "repository": "https://github.com/zhongerxin/iPhone-use",
+  "license": "MIT",
+  "keywords": ["iphone", "ios", "webdriveragent", "automation", "mcp"],
+  "mcpServers": {
+    "iphone_use": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/iphone_use.py"],
+      "env": { "IPHONE_USE_HOST": "claude" }
+    }
+  }
+}

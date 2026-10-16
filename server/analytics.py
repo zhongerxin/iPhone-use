@@ -134,6 +134,11 @@ def environment():
     return value if value in ("production", "development", "test") else "production"
 
 
+def source():
+    """Which host started this server; the Claude plugin sets IPHONE_USE_HOST=claude, anything else is Codex."""
+    return "claude_plugin_mcp" if os.environ.get("IPHONE_USE_HOST") == "claude" else "codex_plugin_mcp"
+
+
 def anonymous_id(state_dir):
     """Persist a random installation ID across MCP processes, never a device ID."""
     directory = Path(state_dir)
@@ -198,7 +203,7 @@ class Analytics:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "properties": {
                         "app_name": "iphone-use", "app_version": self.version,
-                        "app_surface": "local_mcp", "source": "codex_plugin_mcp",
+                        "app_surface": "local_mcp", "source": source(),
                         "$lib": "iphone-use-mcp", "$process_person_profile": False,
                         "$geoip_disable": True, "session_id": self.session_id,
                         "platform": platform.system(), "environment": environment(),
