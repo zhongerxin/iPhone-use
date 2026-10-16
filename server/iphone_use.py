@@ -21,6 +21,8 @@ from wda_client import WDAClient, WDAError
 from wda_controller import CALL_BUDGET, DEFAULT_MAX_NODES, PhoneController, TYPING_FREQUENCY
 from wda_setup import SetupManager, state_directory
 from wda_apps import AppCatalog
+from wda_photos import PhotoImportManager
+from wda_visual import annotate_and_observe, ocr_available, visual_find
 from wda_screen import ScreenHub
 import wda_image
 from analytics import Analytics
@@ -86,6 +88,10 @@ SCHEMAS={
  "scroll_find":obj({"selector":SEL,"direction":string("Finger movement; up usually reveals later rows.",enum=["up","down","left","right"]),"max_swipes":{**num(0,10,"integer"),"default":1,"description":"0 only queries; positive legacy limits allow at most one swipe, then an unresolved target returns a screenshot for the next decision."}},("selector",)),
  "collect_list":obj({"row_type":string(),"max_pages":num(1,10,"integer"),"end_selector":SEL}),
  "apps":obj({"query":string(max_length=100),"country":string(max_length=2),"source":string(enum=["auto","catalog","installed","apple"]),"limit":num(1,30,"integer")},("query",)),
+ "upload_photo":obj({"path":string(max_length=4096),"request_id":string(max_length=128)},("path","request_id")),
+ "photo_import_status":obj({"request_id":string(max_length=128)},("request_id",)),
+ "visual_observe":obj({}),
+ "visual_find":obj({"text":string("Text to find on screen via local OCR.",max_length=200)},("text",)),
  "doctor":obj({}),"ready":obj({"screenshot":{"type":"boolean","default":True,"description":"Also verify screenshot; false retains status/session/source/viewport/unlock checks."},"recover":{"type":"boolean","default":True,"description":"Normal task startup: omit or set true, so a persistent local.pid/XCTest fault can queue one bounded restart of a proven owned PUA. Use false only for an explicitly requested diagnostic/no-restart check, not a routine precheck. False is respected and returns ready=false, state=recovery_required when restart is needed; queued recovery returns state=recovering. Neither state proves readiness."}}),"metrics":obj({"reset":{"type":"boolean","default":False,"description":"Return the totals, then start a new measurement window."}}),
  "setup":obj({"action":string(enum=["discover","fetch","configure","build","start","stop","status"]),"udid":string(),"team_id":string(),"bundle_id":string(),"source_dir":string(max_length=4096),"local_port":num(1024,65535,"integer"),"device_port":num(1024,65535,"integer"),"job_id":string(),"wait_seconds":{**num(0,30),"description":"Bounded wait for this job: start defaults to 20 seconds, status to 0. Use status with job_id and 20 to await an active start/recovery. Timeout keeps the job running; do not start again."}},("action",))
 }
@@ -120,7 +126,11 @@ DESCRIPTIONS={
  "metrics":"In-process totals without text, app data or images: PUA HTTP time and bytes, tool time, response bytes per tool, and the wait between each response and the next tool request (host, model and user time). reset=true starts a new window."
 }
 DESCRIPTIONS["apps"]="Resolve a real bundle ID by installed-device inventory, bundled verified aliases, or Apple's Search API. Query app name before launch instead of guessing. Store metadata does not prove installation; check installed_verified and publisher/country."
-READS={"doctor","observe","find","wait","metrics","apps"}
+DESCRIPTIONS["upload_photo"]="Upload one actual JPEG/PNG (max 20 MiB) over USB and save original bytes. request_id is durable; see usage skill."
+DESCRIPTIONS["visual_observe"]="Capture a fresh screenshot and run local Apple Vision OCR. Returns a numbered annotated image plus structured text blocks with coordinates. Use the block index or text to identify targets, then tap by coordinate." if ocr_available() else ""
+DESCRIPTIONS["visual_find"]="Search the current screen with local OCR for text and return its center coordinates for tapping. Runs Vision OCR on a fresh screenshot; no cloud call." if ocr_available() else ""
+DESCRIPTIONS["photo_import_status"]="Query one import without uploading. succeeded has asset_id; uncertain must not be retried."
+READS={"doctor","observe","find","wait","metrics","apps","photo_import_status","visual_observe","visual_find"}
 READS.update(("screen","screen_frame"))
 DESCRIPTIONS["screen"]="Open or reuse the live iPhone screen in the Codex side panel. No phone actions or UI controls. Pause the preview before password/Face ID user takeover; resume after explicit completion. READY also opens or reuses this view by default."
 DESCRIPTIONS["screen_frame"]="App-only cached live preview and action cursor events. Never reads XML, starts sessions or occupies the phone operation lock."
@@ -284,6 +294,8 @@ class Runtime:
         self.phone.snapshot_restore=self.save_session
         self.setup_manager=SetupManager(self.state_dir,self.base_url)
         self.apps=AppCatalog(self.state_dir,self.setup_manager)
+        self.photos=PhotoImportManager(self.state_dir,self.client)
+        self.visual_ocr_available=ocr_available()
         self.screen=ScreenHub(self.state_dir)
         self.phone.screen=self.screen
         self.phone.settle_seconds=setting("WDA_SETTLE_SECONDS",SETTLE_SECONDS,0,2)
@@ -564,6 +576,14 @@ class Runtime:
                 except Exception:pass
             if op=="doctor":return self.setup_manager.doctor()
             if op=="apps":return self.apps.lookup(**args)
+            if op=="upload_photo":return self.photos.upload(**args)
+            if op=="photo_import_status":return self.photos.status(**args)
+            if op=="visual_observe":
+                if not self.visual_ocr_available:raise WDAError("ocr_unavailable","Vision OCR is not available on this host.")
+                return self._visual_observe()
+            if op=="visual_find":
+                if not self.visual_ocr_available:raise WDAError("ocr_unavailable","Vision OCR is not available on this host.")
+                return self._visual_find(**args)
             if op=="setup":
                 manager=self.setup_manager
                 candidate_url=self.base_url
@@ -576,7 +596,7 @@ class Runtime:
                 if result.get("ok") and args["action"]=="configure" and "local_port" in args:
                     self.base_url=candidate_url;self.setup_manager=manager
                     self.apps.setup_manager=manager
-                    self.client=WDAClient(self.base_url);self.phone.client=self.client
+                    self.client=WDAClient(self.base_url);self.phone.client=self.client;self.photos.client=self.client
                 return result
             if op=="ready":
                 try:self.screen.start()
@@ -606,6 +626,55 @@ class Runtime:
                 try:self.screen.end(activity)
                 except Exception:pass
             self.phone.tool_records.append({"tool":name,"seconds":round(time.monotonic()-start,4),"error":error})
+
+    def _visual_observe(self):
+        """Capture a screenshot, run OCR, annotate and return structured results."""
+        import tempfile
+        fd,path=tempfile.mkstemp(suffix=".png",prefix="visual-",dir=str(self.state_dir))
+        os.close(fd)
+        try:
+            import urllib.request
+            req=urllib.request.Request(self.base_url+"/screenshot")
+            with urllib.request.urlopen(req,timeout=15) as response:
+                body=response.read()
+            import json as _json
+            data=_json.loads(body)
+            import base64
+            pixels=base64.b64decode(data["value"])
+            from pathlib import Path as _Path
+            _Path(path).write_bytes(pixels)
+            result=annotate_and_observe(path)
+            # Include the annotated image as a content block.
+            from PIL import Image as _Image
+            annotated=result.pop("annotated_path")
+            image_size=_Path(annotated).stat().st_size
+            image_data=base64.b64encode(_Path(annotated).read_bytes()).decode()
+            result["image"]={"path":annotated,"mimeType":"image/png","data":image_data}
+            return result
+        finally:
+            import contextlib
+            with contextlib.suppress(FileNotFoundError):os.unlink(path)
+
+    def _visual_find(self,text):
+        """Capture a screenshot, run OCR, find text and return logical coordinates."""
+        import tempfile
+        fd,path=tempfile.mkstemp(suffix=".png",prefix="visual-",dir=str(self.state_dir))
+        os.close(fd)
+        try:
+            import urllib.request
+            req=urllib.request.Request(self.base_url+"/screenshot")
+            with urllib.request.urlopen(req,timeout=15) as response:
+                body=response.read()
+            import json as _json
+            data=_json.loads(body)
+            import base64
+            pixels=base64.b64decode(data["value"])
+            from pathlib import Path as _Path
+            _Path(path).write_bytes(pixels)
+            return visual_find(path,text)
+        finally:
+            import contextlib
+            with contextlib.suppress(FileNotFoundError):os.unlink(path)
 
     def metrics(self):
         records=list(self.phone.tool_records);responses=list(self.responses)
@@ -655,7 +724,7 @@ def result_content(data,structured=False):
     if not image and data.get("results"):
         last=data["results"][-1];image=last.get("image") or last.get("observation",{}).get("image")
     if image and Path(image["path"]).is_file():content.append({"type":"image","data":base64.b64encode(Path(image["path"]).read_bytes()).decode(),"mimeType":image.get("mimeType","image/png")})
-    result={"content":content,"isError":"error" in data}
+    result={"content":content,"isError":bool(data.get("error"))}
     if structured:result["structuredContent"]=data
     return result
 

@@ -191,7 +191,7 @@ sh scripts/install.sh
 
 ## 工具概览
 
-模型可用 17 个工具，另有 2 个仅供屏幕 widget 使用的工具。
+模型可用 21 个工具，另有 2 个仅供屏幕 widget 使用的工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -201,6 +201,7 @@ sh scripts/install.sh
 | `pua_tap`、`pua_swipe`、`pua_press_button` | 点击、滑动、主屏幕等操作 |
 | `pua_type_text`、`pua_wait` | Unicode 输入与有界等待 |
 | `pua_batch`、`pua_scroll_find`、`pua_collect_list` | 组合动作、滚动查找与列表采集 |
+| `pua_upload_photo`、`pua_photo_import_status` | 通过 USB 将一张 JPEG/PNG 原图导入 iPhone 相册，并按同一 `request_id` 查询结果 |
 | `pua_screen`、`pua_metrics` | 预览开关与有界耗时统计 |
 
 界面异常时先返回截图，再由模型判断下一步：滚动查找一次最多滑一次，仍找不到可点击目标就暂停；遮挡、滚动无进展、输入不符或预期页面未出现也走截图兜底。已有截图直接复用，不自动继续盲滑或重放操作。

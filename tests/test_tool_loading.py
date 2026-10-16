@@ -81,6 +81,16 @@ class ToolLoadingTests(unittest.TestCase):
         self.catalog = {tool["name"]: tool for tool in TOOLS}
         self.batch = self.catalog["pua_batch"]["inputSchema"]
 
+    def test_photo_tools_publish_stable_ids_and_status_contract(self):
+        upload = self.catalog["pua_upload_photo"]
+        status = self.catalog["pua_photo_import_status"]
+        self.assertEqual(upload["inputSchema"]["required"], ["path", "request_id"])
+        self.assertEqual(status["inputSchema"]["required"], ["request_id"])
+        self.assertFalse(upload["annotations"]["readOnlyHint"])
+        self.assertTrue(status["annotations"]["readOnlyHint"])
+        self.assertIn("durable", upload["description"])
+        self.assertIn("uncertain", status["description"])
+
     def test_pua_names_are_consistent_across_the_published_contract_and_guidance(self):
         self.assertEqual(set(self.catalog), {"pua_" + name for name in SCHEMAS})
         self.assertNotIn("wda_", json.dumps(TOOLS) + INSTRUCTIONS)
@@ -127,11 +137,11 @@ class ToolLoadingTests(unittest.TestCase):
 
     def test_catalog_stays_within_the_model_context_budget(self):
         # 0.1.14 published 39,084 bytes, 29,568 of them visible to the model in Codex.
-        self.assertLess(json_bytes({"tools": TOOLS}), 31000)
+        self.assertLess(json_bytes({"tools": TOOLS}), 33000)
         visible = sum(json_bytes({"name": tool["name"], "description": tool["description"],
                                   "parameters": codex_supported_schema(tool["inputSchema"])})
                       for tool in TOOLS if tool.get("_meta", {}).get("ui", {}).get("visibility") != ["app"])
-        self.assertLess(visible, 22000)
+        self.assertLess(visible, 24000)
 
     def test_batch_references_resolve_to_the_complete_runtime_contract(self):
         self.assertIn("$defs", self.batch)

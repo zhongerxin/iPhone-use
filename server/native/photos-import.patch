@@ -1,0 +1,334 @@
+diff --git a/WebDriverAgent.xcodeproj/project.pbxproj b/WebDriverAgent.xcodeproj/project.pbxproj
+index 0000000..0000001 100644
+--- a/WebDriverAgent.xcodeproj/project.pbxproj
++++ b/WebDriverAgent.xcodeproj/project.pbxproj
+@@ -266,6 +266,13 @@
+ 		5E6CDEC88D7F31EEDA3B11FC /* XCUIEventRecording-Protocol.h in Headers */ = {isa = PBXBuildFile; fileRef = B38AC76FAF9275974F272DE9 /* XCUIEventRecording-Protocol.h */; settings = {ATTRIBUTES = (Public, ); }; };
+ 		5E8ECB85C540038310F7827E /* FBTouchIDCommands.h in Headers */ = {isa = PBXBuildFile; fileRef = EE9AB7621CAEDF0C008C271F /* FBTouchIDCommands.h */; };
+ 		5EAD5B877C99E1086732F175 /* FBTouchIDCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = EE9AB7631CAEDF0C008C271F /* FBTouchIDCommands.m */; };
++		5EA11C0DA9F14C7B80000003 /* FBPhotoCommands.h in Headers */ = {isa = PBXBuildFile; fileRef = 5EA11C0BA9F14C7B80000001 /* FBPhotoCommands.h */; };
++		5EA11C0EA9F14C7B8000PH01 /* FBPhotoCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = 5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */; };
++		5EA11C0FA9F14C7B80000005 /* FBPhotoCommands.h in Headers */ = {isa = PBXBuildFile; fileRef = 5EA11C0BA9F14C7B80000001 /* FBPhotoCommands.h */; };
++		5EA11C10A9F14C7B80000006 /* FBPhotoCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = 5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */; };
++		5EA11C11A9F14C7B80000007 /* FBPhotoCommands.h in Headers */ = {isa = PBXBuildFile; fileRef = 5EA11C0BA9F14C7B80000001 /* FBPhotoCommands.h */; };
++		5EA11C12A9F14C7B80000008 /* FBPhotoCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = 5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */; };
++		5EA11C13A9F14C7B80000009 /* FBPhotoCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = 5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */; };
+ 		5FB3A9CA82CFF72F6B1FCBA2 /* XCUIElementAttributesPrivate-Protocol.h in Headers */ = {isa = PBXBuildFile; fileRef = 8EF5BE504321321FB9320C43 /* XCUIElementAttributesPrivate-Protocol.h */; settings = {ATTRIBUTES = (Public, ); }; };
+ 		604A7EDA9D8A9BFCF3B62E5C /* _XCTestObservationInternal-Protocol.h in Headers */ = {isa = PBXBuildFile; fileRef = 0F8E4FAAC62765A3405F90D6 /* _XCTestObservationInternal-Protocol.h */; settings = {ATTRIBUTES = (Public, ); }; };
+ 		60CF6CA8AC7961DCCE402764 /* XCTestCase.h in Headers */ = {isa = PBXBuildFile; fileRef = EE35ACD01E3B77D600A02D78 /* XCTestCase.h */; };
+@@ -320,3 +327,4 @@
+ 		641EE6012240C5CA00173FCB /* FBImageProcessor.m in Sources */ = {isa = PBXBuildFile; fileRef = 63CCF91121ECE4C700E94ABD /* FBImageProcessor.m */; };
+ 		641EE6022240C5CA00173FCB /* FBTouchIDCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = EE9AB7631CAEDF0C008C271F /* FBTouchIDCommands.m */; };
++		5EA11C0EA9F14C7B80000004 /* FBPhotoCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = 5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */; };
+ 		641EE6032240C5CA00173FCB /* FBDebugCommands.m in Sources */ = {isa = PBXBuildFile; fileRef = EE9AB7551CAEDF0C008C271F /* FBDebugCommands.m */; };
+@@ -1552,4 +1559,6 @@
+ 		63FB001C1E84011C0096E5D8 /* XCUIApplicationPlatformServicesProviderDelegate-Protocol.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = "XCUIApplicationPlatformServicesProviderDelegate-Protocol.h"; sourceTree = "<group>"; };
+ 		641EE2DA2240BBE300173FCB /* WebDriverAgentRunner_tvOS.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WebDriverAgentRunner_tvOS.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		641EE6F82240C5CA00173FCB /* WebDriverAgentLib_tvOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = WebDriverAgentLib_tvOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
++		5EA11C0BA9F14C7B80000001 /* FBPhotoCommands.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FBPhotoCommands.h; sourceTree = "<group>"; };
++		5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = FBPhotoCommands.m; sourceTree = "<group>"; };
+ 		641EE7042240CDCF00173FCB /* XCUIElement+FBTVFocuse.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "XCUIElement+FBTVFocuse.h"; sourceTree = "<group>"; };
+@@ -2497,5 +2505,7 @@
+ 				71241D791FAE3D2500B9559F /* FBTouchActionCommands.h */,
+ 				71241D7A1FAE3D2500B9559F /* FBTouchActionCommands.m */,
+ 				EE9AB7621CAEDF0C008C271F /* FBTouchIDCommands.h */,
+ 				EE9AB7631CAEDF0C008C271F /* FBTouchIDCommands.m */,
++				5EA11C0BA9F14C7B80000001 /* FBPhotoCommands.h */,
++				5EA11C0CA9F14C7B80000002 /* FBPhotoCommands.m */,
+ 				EE9AB7641CAEDF0C008C271F /* FBUnknownCommands.h */,
+@@ -3174,7 +3182,8 @@
+ 				648C10B022AAAE4000B81B9A /* TIPreferencesController.h in Headers */,
+ 				71F5BE24252E576C00EE9EBA /* XCUIElement+FBSwiping.h in Headers */,
+ 				641EE6B72240C5CA00173FCB /* FBBaseActionsSynthesizer.h in Headers */,
+ 				641EE6B82240C5CA00173FCB /* FBAlert.h in Headers */,
+ 				641EE6B92240C5CA00173FCB /* XCUIElementQuery.h in Headers */,
+ 				71BB58F02B96511800CB9BFE /* FBVideoCommands.h in Headers */,
++				5EA11C11A9F14C7B80000007 /* FBPhotoCommands.h in Headers */,
+ 				641EE6BA2240C5CA00173FCB /* XCPointerEvent.h in Headers */,
+@@ -3486,8 +3496,9 @@
+ 				9B863AF4DB924A69D173FC7B /* XCAXClient_iOS.h in Headers */,
+ 				16E809B6BFDF7CBD862A7B48 /* TIPreferencesController.h in Headers */,
+ 				42A92793513CA29B39B72721 /* XCUIElement+FBSwiping.h in Headers */,
+ 				268CBDE31376AF96DDDD4BD0 /* FBBaseActionsSynthesizer.h in Headers */,
+ 				462DA317CCA9DBE4F249516B /* FBAlert.h in Headers */,
+ 				79FD4FC269A91F525A4E1413 /* XCUIElementQuery.h in Headers */,
+ 				71BB64FB648CB9BBBD25F3E3 /* FBVideoCommands.h in Headers */,
++				5EA11C0DA9F14C7B80000003 /* FBPhotoCommands.h in Headers */,
+ 				4E54092E98444C98C9887D44 /* XCPointerEvent.h in Headers */,
+@@ -3667,7 +3678,8 @@
+ 				71241D7B1FAE3D2500B9559F /* FBTouchActionCommands.h in Headers */,
+ 				EE158ACA1CBD456F00A3E3F0 /* FBTouchIDCommands.h in Headers */,
+ 				EE35AD6A1E3B77D600A02D78 /* XCUIApplication.h in Headers */,
+ 				EE158ABA1CBD456F00A3E3F0 /* FBCustomCommands.h in Headers */,
+ 				EE158AC41CBD456F00A3E3F0 /* FBOrientationCommands.h in Headers */,
+ 				71BB58EF2B96511800CB9BFE /* FBVideoCommands.h in Headers */,
++				5EA11C0FA9F14C7B80000005 /* FBPhotoCommands.h in Headers */,
+ 				7119097C2152580600BA3C7E /* XCUIScreen.h in Headers */,
+@@ -4548,2 +4548,3 @@
+ 				71BB58F22B96511800CB9BFE /* FBVideoCommands.m in Sources */,
++				5EA11C13A9F14C7B80000009 /* FBPhotoCommands.m in Sources */,
+ 				641EE61F2240C5CA00173FCB /* FBXCodeCompatibility.m in Sources */,
+@@ -4707,2 +4707,3 @@
+ 				849F04D9E87C06F04B33FC77 /* FBVideoCommands.m in Sources */,
++				5EA11C0EA9F14C7B80000004 /* FBPhotoCommands.m in Sources */,
+ 				486CFEAEDCA554C63F4214B3 /* FBXCodeCompatibility.m in Sources */,
+@@ -4817,2 +4817,3 @@
+ 				71BB58F12B96511800CB9BFE /* FBVideoCommands.m in Sources */,
++				5EA11C10A9F14C7B80000006 /* FBPhotoCommands.m in Sources */,
+ 				71F3E7D625417FF400E0C22B /* FBSettings.m in Sources */,
+diff --git a/WebDriverAgentLib/Commands/FBPhotoCommands.h b/WebDriverAgentLib/Commands/FBPhotoCommands.h
+new file mode 100644
+index 0000000..0000001
+--- /dev/null
++++ b/WebDriverAgentLib/Commands/FBPhotoCommands.h
+@@ -0,0 +0,26 @@
++/**
++ * Copyright (c) 2026-present, iPhone Use
++ * Licensed under the Apache 2.0 license found in the project root.
++ */
++
++#import <Foundation/Foundation.h>
++
++#import <WebDriverAgentLib/FBCommandHandler.h>
++
++NS_ASSUME_NONNULL_BEGIN
++
++@interface FBPhotoImportRecord : NSObject
++@property (nonatomic, copy) NSString *requestId;
++@property (nonatomic, copy) NSString *sha256;
++@property (nonatomic, copy) NSString *path;
++@property (nonatomic, copy) NSString *status;
++@property (nonatomic, copy, nullable) NSString *assetId;
++@property (nonatomic, copy, nullable) NSString *error;
++@end
++
++@interface FBPhotoCommands : NSObject <FBCommandHandler>
++@property (class, nonatomic, readonly) NSMutableDictionary<NSString *, FBPhotoImportRecord *> *records;
+++ (NSDictionary *)validatePayload:(NSDictionary *)payload;
++@end
++
++NS_ASSUME_NONNULL_END
+diff --git a/WebDriverAgentLib/Commands/FBPhotoCommands.m b/WebDriverAgentLib/Commands/FBPhotoCommands.m
+new file mode 100644
+index 0000000..0000001
+--- /dev/null
++++ b/WebDriverAgentLib/Commands/FBPhotoCommands.m
+@@ -0,0 +0,200 @@
++/**
++ * Copyright (c) 2026-present, iPhone Use
++ * Licensed under the Apache 2.0 license found in the project root.
++ */
++
++#import "FBPhotoCommands.h"
++
++#import <CommonCrypto/CommonDigest.h>
++#import <Photos/Photos.h>
++
++#import "FBExceptions.h"
++#import "FBResponsePayload.h"
++#import "FBRoute.h"
++#import "FBRouteRequest.h"
++
++static NSString *const FBPhotoAllowedFormat = @"^[A-Za-z0-9._:-]{8,128}$";
++static NSString *const FBPhotoTemporaryDirectory = @"iphone-use-photo-imports";
++static NSMutableDictionary<NSString *, FBPhotoImportRecord *> *FBPhotoRecords;
++
++@implementation FBPhotoImportRecord
++@end
++
++@implementation FBPhotoCommands
++
+++ (void)initialize
++{
++  if (self == FBPhotoCommands.class) {
++    FBPhotoRecords = [NSMutableDictionary new];
++  }
++}
++
+++ (NSArray *)routes
++{
++  return @[
++    [[FBRoute POST:@"/wda/photos/import"].withoutSession respondWithTarget:self action:@selector(handleImport:)],
++    [[FBRoute GET:@"/wda/photos/import/:requestID"].withoutSession respondWithTarget:self action:@selector(handleStatus:)],
++  ];
++}
++
+++ (NSDictionary *)validatePayload:(NSDictionary *)payload
++{
++  NSString *requestId = payload[@"requestId"];
++  NSString *format = payload[@"format"];
++  NSString *expectedDigest = payload[@"sha256"];
++  NSNumber *sizeNumber = payload[@"sizeBytes"];
++  NSNumber *width = payload[@"width"];
++  NSNumber *height = payload[@"height"];
++  NSString *encoded = payload[@"data"];
++  if (![requestId isKindOfClass:NSString.class] || requestId.length < 8 || requestId.length > 128 ||
++      ![requestId canBeConvertedToEncoding:NSASCIIStringEncoding]) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"requestId must be 8-128 ASCII characters" userInfo:nil];
++  }
++  if (!([format isKindOfClass:NSString.class] && ([format isEqualToString:@"jpeg"] || [format isEqualToString:@"png"]))) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"format must be jpeg or png" userInfo:nil];
++  }
++  if (![expectedDigest isKindOfClass:NSString.class] || expectedDigest.length != 64 ||
++      ![expectedDigest.lowercaseString isEqualToString:expectedDigest] ||
++      ![expectedDigest isEqualToString:[self sha256Hex:encoded]]) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"sha256 does not match decoded image bytes" userInfo:nil];
++  }
++  if (![sizeNumber isKindOfClass:NSNumber.class] || sizeNumber.unsignedIntegerValue == 0 ||
++      sizeNumber.unsignedIntegerValue > (20 * 1024 * 1024)) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"sizeBytes is invalid or exceeds 20 MiB" userInfo:nil];
++  }
++  if (![width isKindOfClass:NSNumber.class] || ![height isKindOfClass:NSNumber.class] ||
++      width.unsignedIntegerValue == 0 || height.unsignedIntegerValue == 0 ||
++      width.unsignedIntegerValue > 100000 || height.unsignedIntegerValue > 100000) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"image dimensions are invalid" userInfo:nil];
++  }
++  NSData *data = [[NSData alloc] initWithBase64EncodedString:encoded options:NSDataBase64DecodingIgnoreUnknownCharacters];
++  if (data.length != sizeNumber.unsignedIntegerValue) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"base64 data length does not match sizeBytes" userInfo:nil];
++  }
++  return @{
++    @"requestId": requestId,
++    @"format": format,
++    @"sha256": expectedDigest,
++    @"sizeBytes": sizeNumber,
++    @"width": width,
++    @"height": height,
++    @"data": data,
++  };
++}
++
+++ (NSString *)sha256Hex:(NSString *)encoded
++{
++  NSData *data = [[NSData alloc] initWithBase64EncodedString:encoded options:NSDataBase64DecodingIgnoreUnknownCharacters];
++  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
++  CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
++  NSMutableString *result = [NSMutableString new];
++  for (NSUInteger index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
++    [result appendFormat:@"%02x", digest[index]];
++  }
++  return result.copy;
++}
++
+++ (id<FBResponsePayload>)handleImport:(FBRouteRequest *)request
++{
++  return [self importPayload:request.arguments];
++}
++
+++ (id<FBResponsePayload>)handleStatus:(FBRouteRequest *)request
++{
++  return [self statusForRequestID:request.parameters[@"requestID"]];
++}
++
+++ (id<FBResponsePayload>)importPayload:(NSDictionary *)payload
++{
++  NSDictionary *validated = [self validatePayload:payload];
++  NSString *requestId = validated[@"requestId"];
++  FBPhotoImportRecord *record = FBPhotoRecords[requestId];
++  if (record != nil) {
++    if (![record.sha256 isEqualToString:validated[@"sha256"]]) {
++      @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"requestId was already used for different photo bytes" userInfo:nil];
++    }
++    return FBResponseWithObject([self dictionaryFromRecord:record]);
++  }
++  record = [FBPhotoImportRecord new];
++  record.requestId = requestId;
++  record.sha256 = validated[@"sha256"];
++  record.status = @"processing";
++  FBPhotoRecords[requestId] = record;
++
++  NSString *extension = [validated[@"format"] isEqualToString:@"jpeg"] ? @"jpg" : @"png";
++  NSURL *url = [[[NSFileManager defaultManager] temporaryDirectory] URLByAppendingPathComponent:FBPhotoTemporaryDirectory isDirectory:YES];
++  url = [url URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.%@", requestId, extension]];
++  NSError *error = nil;
++  if (![[NSFileManager defaultManager] createDirectoryAtURL:url.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error]) {
++    record.status = @"failed"; record.error = @"Could not create temporary import directory";
++    return FBResponseWithObject([self dictionaryFromRecord:record]);
++  }
++  if (![validated[@"data"] writeToURL:url options:NSDataWritingAtomic error:&error]) {
++    record.status = @"failed"; record.error = @"Could not persist image bytes";
++    return FBResponseWithObject([self dictionaryFromRecord:record]);
++  }
++  record.path = url.path;
++
++  PHAuthorizationStatus authorization = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelAddOnly];
++  if (authorization == PHAuthorizationStatusNotDetermined) {
++    record.status = @"waiting_for_authorization";
++    dispatch_async(dispatch_get_main_queue(), ^{
++      [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelAddOnly handler:^(PHAuthorizationStatus status) {
++        if (status != PHAuthorizationStatusAuthorized) {
++          FBPhotoRecords[requestId].status = @"failed";
++          FBPhotoRecords[requestId].error = @"Photo add permission was denied";
++          return;
++        }
++        [self saveRecord:FBPhotoRecords[requestId]];
++      }];
++    });
++    return FBResponseWithObject([self dictionaryFromRecord:record]);
++  }
++  if (authorization != PHAuthorizationStatusAuthorized) {
++    record.status = @"failed"; record.error = @"Photo add permission was denied";
++    return FBResponseWithObject([self dictionaryFromRecord:record]);
++  }
++  return [self saveRecord:record];
++}
++
+++ (id<FBResponsePayload>)saveRecord:(FBPhotoImportRecord *)record
++{
++  NSError *error = nil;
++  __block NSString *assetId = nil;
++  BOOL changed = [[PHPhotoLibrary sharedPhotoLibrary] performChangesAndWait:^{
++    PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
++    PHAssetResourceCreationOptions *options = [PHAssetResourceCreationOptions new];
++    options.originalFilename = [NSString stringWithFormat:@"PUA-%@.%@", record.requestId, record.path.pathExtension.lowercaseString];
++    [request addResourceWithType:PHAssetResourceTypePhoto fileURL:[NSURL fileURLWithPath:record.path] options:options];
++    assetId = request.placeholderForCreatedAsset.localIdentifier;
++  } error:&error];
++  if (!changed) {
++    record.status = @"failed";
++    record.error = @"PhotoKit rejected the original-file import";
++  } else {
++    record.status = @"succeeded";
++    record.assetId = assetId;
++  }
++  return FBResponseWithObject([self dictionaryFromRecord:record]);
++}
++
+++ (id<FBResponsePayload>)statusForRequestID:(NSString *)requestID
++{
++  FBPhotoImportRecord *record = FBPhotoRecords[requestID];
++  if (record == nil) {
++    @throw [NSException exceptionWithName:FBInvalidArgumentException reason:@"photo import record not found" userInfo:nil];
++  }
++  return FBResponseWithObject([self dictionaryFromRecord:record]);
++}
++
+++ (NSDictionary *)dictionaryFromRecord:(FBPhotoImportRecord *)record
++{
++  return @{
++    @"requestId": record.requestId,
++    @"status": record.status,
++    @"assetId": record.assetId ?: NSNull.null,
++    @"error": record.error ?: NSNull.null,
++  };
++}
++
++@end
+diff --git a/WebDriverAgentLib/WebDriverAgentLib.h b/WebDriverAgentLib/WebDriverAgentLib.h
+--- a/WebDriverAgentLib/WebDriverAgentLib.h
++++ b/WebDriverAgentLib/WebDriverAgentLib.h
+@@ -23,2 +23,3 @@
+ #import <WebDriverAgentLib/FBElementTypeTransformer.h>
++#import <WebDriverAgentLib/FBPhotoCommands.h>
+ #import <WebDriverAgentLib/FBErrorBuilder.h>
+diff --git a/WebDriverAgentRunner/Info.plist b/WebDriverAgentRunner/Info.plist
+index 0000000..0000003 100644
+--- a/WebDriverAgentRunner/Info.plist
++++ b/WebDriverAgentRunner/Info.plist
+@@ -23,4 +23,6 @@
+ 	<key>NSLocationWhenInUseUsageDescription</key>
+ 	<string></string>
++	<key>NSPhotoLibraryAddUsageDescription</key>
++	<string>iPhone Use can save photos you explicitly choose on this Mac.</string>
+ </dict>
+ </plist>

@@ -28,6 +28,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import wda_patches
+
 WDA_COMMIT = "d17782422d55ff1e5e0ceb74eb1fd509cc0c35b6"
 WDA_VERSION = "16.14.0"
 WDA_REPOSITORY = "https://github.com/appium/WebDriverAgent.git"
@@ -183,9 +185,25 @@ class SetupManager:
         revision = _run(["git", "-C", str(source), "rev-parse", "HEAD"])
         if not revision["ok"] or revision["stdout"].strip() != WDA_COMMIT:
             raise ValueError(f"WDA source must be pinned to {WDA_VERSION} ({WDA_COMMIT}); existing checkouts are never changed automatically.")
-        dirty = _run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"])
-        if not dirty["ok"] or dirty["stdout"].strip():
-            raise ValueError("Pinned WDA source has tracked changes. Use fetch for a clean isolated checkout; existing work is preserved.")
+        dirty = _run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"])
+        reverse = _run(["git", "-C", str(source), "apply", "--check", "--reverse", str(wda_patches.PATCH)])
+        if not dirty["ok"]:
+            raise ValueError("Could not inspect the WDA source checkout.")
+        # The plugin-owned patched checkout has exactly the expected tracked
+        # modifications. External or accidentally edited checkouts are refused.
+        expected_modified = {
+            "WebDriverAgent.xcodeproj/project.pbxproj",
+            "WebDriverAgentLib/WebDriverAgentLib.h",
+            "WebDriverAgentRunner/Info.plist",
+        }
+        modified = {line[2:].lstrip() for line in dirty["stdout"].splitlines() if line.startswith(" M ")}
+        expected_untracked = {
+            "WebDriverAgentLib/Commands/FBPhotoCommands.h",
+            "WebDriverAgentLib/Commands/FBPhotoCommands.m",
+        }
+        untracked = {line[3:] for line in dirty["stdout"].splitlines() if line.startswith("?? ")}
+        if modified != expected_modified or untracked != {path for path in expected_untracked} or not reverse["ok"]:
+            raise ValueError("Pinned WDA source has unexpected changes. Preserve it and use fetch for a clean isolated patched checkout.")
         return source
 
     @staticmethod
@@ -395,8 +413,10 @@ class SetupManager:
 
     def _require_build(self, config):
         marker = _read_json(self.state_dir / "build.json", {})
-        if marker.get("config_fingerprint") != _fingerprint(config) or marker.get("commit") != WDA_COMMIT:
-            raise ValueError("Run build successfully for this configuration before start; start uses test-without-building.")
+        if (marker.get("config_fingerprint") != _fingerprint(config)
+                or marker.get("commit") != WDA_COMMIT
+                or marker.get("patch_fingerprint") != wda_patches.PATCH_FINGERPRINT):
+            raise ValueError("Run build successfully for this configuration and WDA patch before start; start uses test-without-building.")
 
     @staticmethod
     def _publishing_pid(job):
@@ -590,7 +610,8 @@ class SetupManager:
                 "-scheme", "WebDriverAgentRunner", "-configuration", "Debug", "-destination", "id=" + config["udid"],
                 "-derivedDataPath", str(self.state_dir / "derived_data"), "-allowProvisioningUpdates",
                 "DEVELOPMENT_TEAM=" + config["team_id"], "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development",
-                "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"]), action]
+                "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"]),
+                "USE_IP=127.0.0.1", "MAX_HTTP_REQUEST_BODY_SIZE=" + str(wda_patches.MAX_HTTP_BODY_BYTES), action]
 
     def setup(self, action, **args):
         wait_seconds = args.pop("wait_seconds", 20 if action == "start" else 0)
@@ -783,24 +804,28 @@ def _worker(state_dir, job_id, owner_token, base_url):
     try:
         action, config = job["action"], job["config"]
         if action == "fetch":
-            source = manager.state_dir / "runtime/WebDriverAgent"
+            source = manager.state_dir / f"runtime/WebDriverAgent-{wda_patches.PATCH_FINGERPRINT[:12]}"
             if not source.exists():
                 source.mkdir(mode=0o700)
                 run(["git", "init", str(source)])
                 run(["git", "-C", str(source), "remote", "add", "origin", WDA_REPOSITORY])
-            try:
-                manager._source({"source_dir": str(source)})
-            except ValueError:
-                # Resume an interrupted fetch in this plugin-owned checkout.
-                # Never reset tracked modifications or touch a reused source_dir.
-                dirty = _run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"])
+            else:
                 origin = _run(["git", "-C", str(source), "remote", "get-url", "origin"])
-                if not dirty["ok"] or dirty["stdout"].strip() or not origin["ok"] or origin["stdout"].strip() != WDA_REPOSITORY:
-                    raise ValueError("Owned runtime checkout is modified or has a different origin. Preserve it and select a new external runtime state directory before fetching again.")
-                run(["git", "-C", str(source), "fetch", "--depth", "1", "origin", WDA_COMMIT])
-                run(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
-                manager._source({"source_dir": str(source)})
+                if not origin["ok"] or origin["stdout"].strip() != WDA_REPOSITORY:
+                    raise ValueError("Owned runtime checkout has a different origin. Preserve it and select a new runtime state directory before fetching again.")
+            run(["git", "-C", str(source), "fetch", "--depth", "1", "origin", WDA_COMMIT])
+            run(["git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD"])
+            wda_patches.apply(source)
+            # The patched upstream checkout intentionally has tracked changes;
+            # prove the exact upstream commit and reverse-applicable patch instead.
+            revision = _run(["git", "-C", str(source), "rev-parse", "HEAD"])
+            reverse = _run(["git", "-C", str(source), "apply", "--check", "--reverse", str(wda_patches.PATCH)])
+            if (not revision["ok"] or revision["stdout"].strip() != WDA_COMMIT
+                    or not reverse["ok"]):
+                raise ValueError("Patched WDA source verification failed after fetch; preserve the checkout and fetch into a new runtime directory.")
             job["source_dir"] = str(source)
+            config = dict(config, source_dir=str(source))
+            _write_json(manager.state_dir / "config.json", config)
         elif action in {"build", "start", "recover"}:
             manager._validate_config(config)
             source = manager._source(config)
@@ -809,7 +834,9 @@ def _worker(state_dir, job_id, owner_token, base_url):
                 with contextlib.suppress(FileNotFoundError):
                     (manager.state_dir / "build.json").unlink()
                 run(manager._build_command(config, "build-for-testing"), cwd=source)
-                _write_json(manager.state_dir / "build.json", {"config_fingerprint": _fingerprint(config), "commit": WDA_COMMIT, "built_at": _now()})
+                _write_json(manager.state_dir / "build.json", {
+                    "config_fingerprint": _fingerprint(config), "commit": WDA_COMMIT,
+                    "patch_fingerprint": wda_patches.PATCH_FINGERPRINT, "built_at": _now()})
             else:
                 if action == "recover":
                     # /status.ready cannot verify XCTest authorization. This

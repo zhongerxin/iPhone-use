@@ -197,7 +197,7 @@ These changes reduce duplicate requests and model round trips. Overall task spee
 
 ## Tools
 
-There are 17 model tools and 2 additional widget-only tools.
+There are 21 model tools and 2 additional widget-only tools.
 
 | Tools | Purpose |
 | --- | --- |
@@ -207,6 +207,7 @@ There are 17 model tools and 2 additional widget-only tools.
 | `pua_tap`, `pua_swipe`, `pua_press_button` | Taps, swipes, and device buttons |
 | `pua_type_text`, `pua_wait` | Unicode input and bounded waits |
 | `pua_batch`, `pua_scroll_find`, `pua_collect_list` | Compound actions, search, collection |
+| `pua_upload_photo`, `pua_photo_import_status` | Import one original JPEG/PNG over USB, then query the same durable request |
 | `pua_screen`, `pua_metrics` | Preview controls and bounded timing statistics |
 
 Abnormal UI states return a screenshot for the model to inspect before choosing another action. Scroll search performs at most one swipe per call and stops if the target remains unreachable; occlusion, unproven scroll progress, input mismatch, and failed page expectations use the same fallback. Existing screenshots are reused, without automatic extra gestures or action replay.

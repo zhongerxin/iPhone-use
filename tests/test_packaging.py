@@ -46,6 +46,7 @@ class PackagingTests(unittest.TestCase):
             self.assertIn('server/posthog.json', contents)
             self.assertIn('ANALYTICS.md', contents)
         self.assertIn('tests/test_packaging.py', entries)
+        self.assertIn('tests/test_wda_photos.py', entries)
         self.assertIn('.github/workflows/check.yml', entries)
         self.assertIn('scripts/benchmark.py', entries)
         self.assertNotIn('scripts/benchmark.py', installed)
@@ -59,7 +60,8 @@ class PackagingTests(unittest.TestCase):
             rel = source.relative_to(ROOT)
             if source.is_file() and 'node_modules' not in rel.parts:
                 self.assertEqual((self.stage / rel).read_bytes(), source.read_bytes(), str(rel))
-        for name in ('assets/phone-screen.html', 'tooling/screen-stream.mjs', 'tooling/forward.mjs',
+        for name in ('server/wda_patches.py', 'server/wda_photos.py', 'server/native/photos-import.patch',
+                     'assets/phone-screen.html', 'tooling/screen-stream.mjs', 'tooling/forward.mjs',
                      'tooling/package-lock.json', 'scripts/phone.py', 'scripts/check_screen_ui.py'):
             self.assertEqual((self.stage / name).read_bytes(), (ROOT / name).read_bytes(), name)
         for document in list((self.stage / 'skills').rglob('*.md')) + [self.stage / 'README.md', self.stage / 'README.en.md', self.stage / 'CHANGELOG.md']:
@@ -93,7 +95,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(len(replies), 4)
         self.assertTrue(all('error' not in reply for reply in replies), str([r.get('error') for r in replies]))
         self.assertEqual(replies[0]['result']['serverInfo']['version'], version)
-        self.assertEqual(len(replies[1]['result']['tools']), 19)
+        self.assertEqual(len(replies[1]['result']['tools']), 23)
         uri = replies[2]['result']['resources'][0]['uri']
         read = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'resources/read', 'params': {'uri': uri}}) + '\n'
         process = subprocess.run([sys.executable, str(rebuilt / 'server/iphone_use.py')], input=read, capture_output=True, text=True, timeout=15, check=True)

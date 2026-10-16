@@ -63,6 +63,12 @@ for (const block of result.content ?? []) {
 
 以上用于可恢复的界面定位问题。参数错误按 schema 修正，通道故障恢复 READY，锁屏 / 认证等用户完成。动作是否生效不确定时先读真实状态，不能重放输入、发送、下单或整个批次；截图足以处理的常规遮挡应继续尝试，不提前把任务交还用户。
 
+## Mac 图片导入相册
+
+需要把 Mac 上的一张 JPEG/PNG 原图导入 iPhone 相册时，先 READY，再调用 `pua_upload_photo(path, request_id)`。`path` 是本机文件路径；`request_id` 是这次导入的持久编号，断线、超时或重启后必须沿用，不能用新编号重试。工具会校验实际格式、尺寸和 20 MiB 上限，计算 SHA-256，并经 USB 通道保存原始字节，不截图、不重新编码、不读取整个相册。
+
+返回状态为 `waiting_for_authorization` 时，首次照片添加授权由用户在 iPhone 上完成；完成或拒绝后再用 `pua_photo_import_status(request_id)` 查询。`processing` 继续查询；`succeeded` 返回照片 `asset_id`；`failed` 按错误处理；`uncertain` 表示可能已写入或回执丢失，只能人工核对相册，禁止自动换 ID 或重新上传。同一 `request_id` 且相同图片会返回既有结果；同一 `request_id` 但图片不同会报告冲突。旧版执行服务不含该接口时按升级构建指引处理。
+
 ## App 与常规动作
 
 需要把手机中的图片、视频或其他文件传回 Mac 使用时，参照 [AirDrop 文件传回 Mac](references/airdrop.md)，发送后到下载目录找到文件即可使用。

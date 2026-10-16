@@ -181,17 +181,33 @@ class SetupTests(unittest.TestCase):
              patch.object(wda_setup, "_run", return_value={"ok": True, "stdout": prefixed_command}):
             self.assertFalse(self.manager._owned(job))
 
-    def test_source_reuse_checks_pin_and_preserves_checkout(self):
+    def test_source_reuse_requires_pinned_and_reverse_applicable_patch(self):
         source = Path(self.temp.name) / "external-source"
         (source / "WebDriverAgent.xcodeproj").mkdir(parents=True)
         (source / "WebDriverAgent.xcodeproj/project.pbxproj").write_text("fixture")
-        responses = [{"ok": True, "stdout": "wrong-head\n"}]
+        # Wrong commit, then correct clean upstream, then expected patched checkout.
+        clean_status = ""
+        patched_status = (
+            " M WebDriverAgent.xcodeproj/project.pbxproj\n"
+            " M WebDriverAgentLib/WebDriverAgentLib.h\n"
+            " M WebDriverAgentRunner/Info.plist\n"
+            "?? WebDriverAgentLib/Commands/FBPhotoCommands.h\n"
+            "?? WebDriverAgentLib/Commands/FBPhotoCommands.m\n"
+        )
+        responses = [
+            {"ok": True, "stdout": "wrong-head\n"},
+            {"ok": True, "stdout": wda_setup.WDA_COMMIT + "\n", "stderr": ""},
+            {"ok": True, "stdout": clean_status, "stderr": ""},
+            {"ok": False, "code": 1, "stdout": "", "stderr": "not reverse"},
+            {"ok": True, "stdout": wda_setup.WDA_COMMIT + "\n", "stderr": ""},
+            {"ok": True, "stdout": patched_status, "stderr": ""},
+            {"ok": True, "stdout": "", "stderr": ""},
+        ]
         with patch.object(wda_setup, "_run", side_effect=responses):
             self.assertFalse(self.configure(source_dir=str(source))["ok"])
-        self.assertEqual((source / "WebDriverAgent.xcodeproj/project.pbxproj").read_text(), "fixture")
-        responses = [{"ok": True, "stdout": wda_setup.WDA_COMMIT + "\n"}, {"ok": True, "stdout": ""}]
-        with patch.object(wda_setup, "_run", side_effect=responses):
+            self.assertFalse(self.configure(source_dir=str(source))["ok"])
             self.assertTrue(self.configure(source_dir=str(source))["ok"])
+        self.assertEqual((source / "WebDriverAgent.xcodeproj/project.pbxproj").read_text(), "fixture")
 
     def test_start_requires_matching_successful_build(self):
         self.configure()
@@ -220,6 +236,7 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         wda_setup._write_json(self.manager.state_dir / "build.json", {
             "config_fingerprint": wda_setup._fingerprint(self.manager.config), "commit": wda_setup.WDA_COMMIT,
+            "patch_fingerprint": wda_setup.wda_patches.PATCH_FINGERPRINT,
         })
 
     def start_without_device(self):
@@ -287,6 +304,8 @@ class SetupTests(unittest.TestCase):
         self.assertIn("id=" + config["udid"], command)
         self.assertIn(str(self.manager.state_dir / "derived_data"), command)
         self.assertIn("USE_PORT=8100", command)
+        self.assertIn("USE_IP=127.0.0.1", command)
+        self.assertIn("MAX_HTTP_REQUEST_BODY_SIZE=20972544", command)
 
     def test_actual_worker_completes_failure_without_blocking_caller(self):
         # Unsupported internal action exercises a real worker, private job output,
@@ -323,7 +342,16 @@ class SetupTests(unittest.TestCase):
         (source / "WebDriverAgent.xcodeproj").mkdir(parents=True)
         (source / "WebDriverAgent.xcodeproj/project.pbxproj").write_text("fixture")
         git = bin_dir / "git"
-        git.write_text(f"#!{sys.executable}\nimport sys\nif 'rev-parse' in sys.argv: print({wda_setup.WDA_COMMIT!r})\n")
+        patched_status = (
+            " M WebDriverAgent.xcodeproj/project.pbxproj\n"
+            " M WebDriverAgentLib/WebDriverAgentLib.h\n"
+            " M WebDriverAgentRunner/Info.plist\n"
+            "?? WebDriverAgentLib/Commands/FBPhotoCommands.h\n"
+            "?? WebDriverAgentLib/Commands/FBPhotoCommands.m\n"
+        )
+        git.write_text(f"#!{sys.executable}\nimport sys\n"
+                       "if 'rev-parse' in sys.argv: print(" + repr(wda_setup.WDA_COMMIT) + ")\n"
+                       "elif 'status' in sys.argv: print(" + repr(patched_status) + ", end='')\n")
         xcode = bin_dir / "xcodebuild"
         xcode.write_text(f"#!{sys.executable}\nimport subprocess, sys, time\nfrom pathlib import Path\n"
                          "child=subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(120)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
@@ -353,6 +381,7 @@ class SetupTests(unittest.TestCase):
         config = self.manager.config
         wda_setup._write_json(self.manager.state_dir / "build.json", {
             "config_fingerprint": wda_setup._fingerprint(config), "commit": wda_setup.WDA_COMMIT,
+            "patch_fingerprint": wda_setup.wda_patches.PATCH_FINGERPRINT,
         })
         job = self.job()
         job.update(config=config, worker_entrypoint=str(Path(wda_setup.__file__).resolve()), base_url=self.manager.base_url)
