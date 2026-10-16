@@ -16,6 +16,8 @@
 | HTTP status 可达，会话或 source 失败 | 服务对应的设备、PUA session、设备锁屏 / 测试进程 | 先读取错误与状态，必要时重建会话 / 重启 Runner；重新验有效视口与当前观察。 |
 | stale element reference 含 local.pid.0 / pua_foreground_unavailable | PUA / XCTest 是否能解析当前真实前台，不能只看 status.ready | 调用 pua_ready；只重读一次会话 / 界面，持续故障再按 recovery 跟踪已核验归属的后台服务恢复。旧观察和元素 ID 作废。 |
 | XCTDaemonErrorDomain Code=41 / Not authorized for performing UI testing actions | 测试进程授权状态及手机开发者设置 | 调用 pua_ready 跟踪恢复；仍失败时用户检查解锁、开发者模式 / 启用 UI 自动化及信任提示，不连续重试按键。 |
+| runner code 74 / DTX 通道拒绝 / IDE disconnection | 当前 job 的 diagnostics、runner 与 xcodebuild 各自的退出码，以及同一次运行的 CoreDevice 连接状态 | 先查看 diagnostics.report_path、result_bundle_path 和 host_log_path。失败发生在测试初始化时，Runner 测试方法内的 try/catch 无法捕获；不要仅凭 74 判定 VPN、签名或端口故障。对比同一设备与传输下的官方 XCTest 模板、授权和网络条件，再决定下一步。 |
+| Timed out while enabling automation mode | 手机解锁、启用 UI 自动化及实际认证提示 | 用户自己完成手机认证后，复用现有构建启动并验 READY；不把此超时当成已确认的 DTX 拒绝或自动重装理由。 |
 | ready=false，state=recovering | recovery.job_id 对应的 setup status 和日志 | 正常未就绪状态，不因 isError=false 当作 READY。轮询同一工作至 recovery_phase=serving，再重新验 READY。Runner 为长期服务，可以保持 running；不能重复 start 或等待 succeeded。 |
 | ready=false，state=recovery_required，reason=recovery_disabled | 当前调用是否设置 recover=false，用户是否明确禁止重启 / 要求只读诊断 | 指令允许恢复时按 recovery.next_tool / next_arguments 调用 recover=true；有明确限制则保留并报告通道阻塞。正常任务首次 READY 使用默认 true，不因预检或谨慎主动关闭恢复。 |
 | pua_recovery_required，recovery.state=cooldown / manual | 冷却剩余时间、配置、worker 和监听端口归属、有效构建 | 120 秒冷却期间按 retry_after_seconds 诊断；归属不明或外部服务不得按端口杀进程，按返回的手动步骤恢复。 |
@@ -25,6 +27,8 @@
 | PUA 可用，但控件树缺少内容，或标签定位失败 | 页面是否自绘、受保护或树是否截断 | 不换标签反复重试：按失败结果附带的截图改用坐标点击；输入则先点中输入框，再调用不带 selector 的 `pua_type_text`。仍无法观察则报告具体限制。 |
 
 status 返回 `jobs` 数组，用 id 匹配请求的 job_id，不读取不存在的单个 job 或吞掉解析异常。fetch / build 查看完成或失败终态；普通 start 是长期运行服务，`service.ready=true` 后调用 READY 即可，不等 Runner 变 succeeded。恢复工作按 recovery_phase=serving 后重验 READY。查询依据当前阶段、日志和 retry_after_seconds，不固定长间隔反复等、不重复 start。
+
+start / recover 在启动 XCTest 前开始记录限定进程与事件的 Mac 原生日志，并给每个工作分配独立的 `.xcresult`。失败后，status 的 `diagnostics` 返回观察到的失败阶段、两层退出码和具体错误摘录；完整证据在外部运行目录的 `diagnostics/<job_id>/failure.json`。Mac 日志保留至多两份各 1 MiB 的文件；原始 `.xcresult` 与设备信息只在本机私有目录保存，不自动上传。共享 CoreDevice 日志只作上下文，不能单独证明属于当前 Runner。日志工具无权限或结果解析失败不替代原始启动错误；未知根因保持 `undetermined`。可用 `IPHONE_USE_XCTEST_HOST_LOG=0` 关闭额外的 Mac 日志流，仍保留该工作自己的控制台错误与结果包。
 
 READY 自带当前 observation，直接复用它准备下一步。常规 tap、Home、launch、输入和滚动默认乐观执行；普通 verified=false 不要求停下或另调观察。下一步需要未知页面时，在该次动作返回所需观察并顺带判断进度；仅最终关键结果显式 expect / verify 或终态回读。已知坐标 / region 无需为了 observation ID 另读图或树；若使用 ID，必须来自同一 Runtime 和相符的 App / 视口。
 

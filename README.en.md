@@ -217,6 +217,8 @@ New installations use `~/.local/share/iphone-use/`. Set `IPHONE_USE_STATE_DIR` f
 
 Runtime directories use mode 700 and private configuration / image files use 600. Explicit screenshots have retention limits; preview streams stay in memory. Signing material, device data, logs, and dependency directories are excluded from source packages. `WDA_URL` accepts a local address; the default forwarded port is 18100, and remote addresses are rejected.
 
+When WDA startup or recovery fails, `pua_setup(action="status", job_id=...)` exposes `diagnostics` with XCTest error excerpts, separate Runner and xcodebuild exit codes, and private local artifact paths. Host logging starts before XCTest, and each job has its own `.xcresult`, preserving failures before the test method runs. Exit 74 alone does not establish a VPN or signing cause. Diagnostics are not uploaded automatically; set `IPHONE_USE_XCTEST_HOST_LOG=0` to disable the additional Mac log stream.
+
 ```sh
 git pull --ff-only
 sh scripts/install.sh

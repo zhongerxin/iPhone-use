@@ -211,6 +211,8 @@ sh scripts/install.sh
 
 运行目录权限为 700，私有配置和图像文件为 600。明确调用的截图有保留上限，预览流不落盘。签名材料、设备数据、运行日志与依赖目录均不进入源代码发布包。`WDA_URL` 可指定本机地址，默认转发端口为 18100，远程地址会被拒绝。
 
+WDA 启动或恢复失败时，`pua_setup(action="status", job_id=...)` 的 `diagnostics` 提供 XCTest 错误摘录、Runner 与 xcodebuild 各自的退出码，以及本机诊断文件路径。启动前采集的 Mac 日志和独立 `.xcresult` 可以保留测试方法执行前的失败证据；根因尚不明确时不会仅凭 code 74 认定 VPN 或签名问题。诊断数据保留在上述私有运行目录，不自动上传；`IPHONE_USE_XCTEST_HOST_LOG=0` 可关闭额外的 Mac 日志流。
+
 更新已克隆的仓库：
 
 ```sh

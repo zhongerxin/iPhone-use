@@ -28,6 +28,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from wda_diagnostics import XCTestDiagnostics
+
 WDA_COMMIT = "d17782422d55ff1e5e0ceb74eb1fd509cc0c35b6"
 WDA_VERSION = "16.14.0"
 WDA_REPOSITORY = "https://github.com/appium/WebDriverAgent.git"
@@ -110,6 +112,10 @@ def _node_supported(version):
 def _diagnose(text):
     text = text.lower()
     cases = [
+        (("peer refused channel request", "test runner exited with code 74", "failed to retrieve test configuration from ide", "exiting due to ide disconnection"),
+         "XCTest failed to establish or retain its IDE control channel. Inspect this job's diagnostics/report_path, result_bundle_path and host_log_path; runner exit 74 is separate from xcodebuild's exit code and does not identify a VPN, signing or network root cause. Compare Xcode's native XCTest template on the same device/transport, device authorization and network conditions before rebuilding or changing pairing."),
+        (("timed out while enabling automation mode",),
+         "XCTest timed out enabling UI automation before WDA's test method. Keep the iPhone unlocked and check its Enable UI Automation setting and actual authentication prompt; the user must complete passwords or biometric authentication. Retry the existing build after that state changes."),
         (("not authorized for performing ui testing actions", "xctdaemonerror code=41", "xctdaemonerror code = 41"),
          "XCTest UI automation authorization is unavailable even if WDA status.ready is true. Inspect setup status, stop only this plugin's owned start job, start it again and verify pua_ready with a current UI observation. Preserve external services and ask their owner to restart them. If authorization still fails, check Developer Mode and Enable UI Automation on the unlocked iPhone; do not bypass trust or authentication prompts."),
         (("maximum number", "three apps", "3 apps", "0xe8008029"),
@@ -543,7 +549,10 @@ class SetupManager:
         result.pop("recovery_target", None)
         result["log_path"] = str(log)
         result["log_tail"] = _redact("\n".join(tail.splitlines()[-35:]))
-        result["next_steps"] = _diagnose(tail + " " + result.get("error", ""))
+        evidence = result.get("diagnostics", {}).get("evidence", [])
+        result["next_steps"] = _diagnose(tail + " " + result.get("error", "") + "\n" +
+                                       "\n".join(item.get("message", "") for item in evidence
+                                                 if item.get("source") in {"xcodebuild", "xcresult"}))
         return result
 
     def _jobs(self):
@@ -585,12 +594,15 @@ class SetupManager:
             _write_json(path, job)
         return {"ok": job["state"] != "failed", "job_id": job_id, "job": self._job_status(job), "next_step": "Poll setup status with this job_id; do not block MCP waiting for Xcode."}
 
-    def _build_command(self, config, action):
-        return ["xcodebuild", "-project", str(Path(config["source_dir"]) / "WebDriverAgent.xcodeproj"),
+    def _build_command(self, config, action, result_bundle=None):
+        command = ["xcodebuild", "-project", str(Path(config["source_dir"]) / "WebDriverAgent.xcodeproj"),
                 "-scheme", "WebDriverAgentRunner", "-configuration", "Debug", "-destination", "id=" + config["udid"],
                 "-derivedDataPath", str(self.state_dir / "derived_data"), "-allowProvisioningUpdates",
                 "DEVELOPMENT_TEAM=" + config["team_id"], "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development",
-                "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"]), action]
+                "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"])]
+        if result_bundle is not None:
+            command.extend(["-resultBundlePath", str(result_bundle)])
+        return command + [action]
 
     def setup(self, action, **args):
         wait_seconds = args.pop("wait_seconds", 20 if action == "start" else 0)
@@ -737,6 +749,9 @@ def _worker(state_dir, job_id, owner_token, base_url):
     log_threads = []
     log_lock = threading.Lock()
     stopping = False
+    diagnostics = None
+    xcode = forward_child = None
+    failure_codes = {}
 
     def launch(argv, cwd=None):
         """Redact command output before it reaches the private on-disk log."""
@@ -748,6 +763,8 @@ def _worker(state_dir, job_id, owner_token, base_url):
         def relay():
             with child.stdout:
                 for line in child.stdout:
+                    if diagnostics is not None and Path(argv[0]).name == "xcodebuild":
+                        diagnostics.record("xcodebuild", line)
                     with log_lock:
                         print(_redact(line.rstrip("\r\n")), flush=True)
 
@@ -833,7 +850,12 @@ def _worker(state_dir, job_id, owner_token, base_url):
                 time.sleep(0.15)
                 if forward_child.poll() is not None:
                     raise RuntimeError("USB forward failed to start; inspect the log tail.")
-                xcode = launch(manager._build_command(config, "test-without-building"), source)
+                diagnostics = XCTestDiagnostics(manager.state_dir, job_id, _redact)
+                diagnostics.start_host_log()
+                job["diagnostics"] = diagnostics.paths()
+                _write_json(path, job)
+                xcode = launch(manager._build_command(config, "test-without-building",
+                                                       diagnostics.result_bundle), source)
                 next_status_probe = 0
                 # Keep both children owned and watch either side fail.
                 while not stopping and all(child.poll() is None for child in (forward_child, xcode)):
@@ -855,9 +877,17 @@ def _worker(state_dir, job_id, owner_token, base_url):
     except InterruptedError as error:
         job.update(state="stopped", completed_at=_now(), error=str(error))
     except Exception as error:
+        # Snapshot observed return codes before owner cleanup sends any signals.
+        failure_codes = {name: child.poll() if child is not None else None
+                         for name, child in (("xcodebuild", xcode), ("forward", forward_child))}
+        if diagnostics is not None and xcode is not None and failure_codes["xcodebuild"] is None:
+            diagnostics.cleanup_while_xcode_active = True
         job.update(state="failed", completed_at=_now(), error=_redact(error))
         print(_redact(error), file=sys.stderr, flush=True)
     finally:
+        if diagnostics is not None:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                diagnostics.stop_host_log()
         # All commands inherit this worker's group. Broadcast TERM to include
         # grandchildren, temporarily ignoring it in the leader while cleaning up.
         if os.getpgrp() == os.getpid():
@@ -887,6 +917,21 @@ def _worker(state_dir, job_id, owner_token, base_url):
                     pass
         for thread in log_threads:
             thread.join(timeout=1)
+        if diagnostics is not None:
+            job["diagnostics"] = diagnostics.paths()
+            if job["state"] == "failed" and not stopping:
+                try:
+                    report = diagnostics.failure_report(failure_codes.get("xcodebuild"),
+                                                        failure_codes.get("forward"), config["udid"], _run)
+                    _write_json(diagnostics.report_path, report)
+                    # Full bounded evidence stays in the private report. Keep
+                    # status responses short and omit shared host context.
+                    job["diagnostics"] = {key: value for key, value in report.items()
+                                          if key not in {"evidence", "host_evidence"}}
+                    job["diagnostics"]["evidence"] = report["evidence"][-12:]
+                except Exception as error:
+                    # Diagnostic failures never replace the actual runner error.
+                    job["diagnostics"]["collection_error"] = _redact(error)
         _write_json(path, job)
     return 0 if job["state"] == "succeeded" else 1
 
