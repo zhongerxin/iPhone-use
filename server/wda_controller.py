@@ -426,6 +426,14 @@ class PhoneController:
             element["hittable"]=self.client.session("GET","/element/"+quote(element["element_id"],safe="")+"/attribute/hittable") in (True,1,"true","1")
         return element["hittable"]
 
+    def element_type(self,element):
+        kind=element.get("type") or element.get("_type")
+        if kind is None:
+            path="/element/"+quote(element["element_id"],safe="")
+            kind=self.client.session("GET",path+"/attribute/type")
+            element["_type"]=kind
+        return kind
+
     def describe(self,element):
         rect=self.element_rect(element)
         described={"index":element["index"],**compact_node({**element,"rect":rect}),"tap":[round(rect["x"]+rect["width"]/2),round(rect["y"]+rect["height"]/2)]}
@@ -494,8 +502,15 @@ class PhoneController:
             self.last_target={"matches":matches,"chosen":"only_match_on_screen","index":candidates[0]["index"]}
             return candidates[0]
         listed=candidates[:CANDIDATE_LIMIT]
+        switches=[e for e in listed if self.element_type(e) in ("XCUIElementTypeSwitch","Switch")] if not editable else []
+        if len(switches)==1 and complete and len(listed)==len(candidates)>1:
+            switch=switches[0]
+            s_rect=self.element_rect(switch)
+            if all(contains(s_rect,self.element_rect(other)) or contains(self.element_rect(other),s_rect) for other in listed if other is not switch):
+                self.last_target={"matches":matches,"chosen":"switch_knob","index":switch["index"]}
+                return switch
         ordered=sorted(listed,key=lambda element:element["rect"]["width"]*element["rect"]["height"])
-        nested=complete and len(listed)==len(candidates)>1 and all(contains(ordered[i+1]["rect"],ordered[i]["rect"]) for i in range(len(ordered)-1))
+        nested=complete and len(listed)==len(candidates)>1 and len(switches)==0 and all(contains(ordered[i+1]["rect"],ordered[i]["rect"]) for i in range(len(ordered)-1))
         if nested:
             # Nested matches share one touch point: the innermost centre lies inside every one of them.
             for element in ordered:
@@ -523,15 +538,21 @@ class PhoneController:
         if rect["width"]<=0 or rect["height"]<=0 or not (0<=cx<viewport["width"] and 0<=cy<viewport["height"]):
             fail("offscreen_target","Target center is outside the viewport. Scroll the actual list into view, observe again and re-find the target; a stopped batch has not completed its failed step.",action_executed=False,target_rect=rect,viewport=viewport,recovery={"next_tool":"pua_observe","next_arguments":{"mode":"both"},"replay_action":False})
         path="/element/"+quote(element["element_id"],safe="")
+        is_switch=not editable and self.element_type(element) in ("XCUIElementTypeSwitch","Switch")
+        tap_x=rect["x"]+rect["width"]-26 if is_switch else cx
+        tap_y=cy
         if not self.element_hittable(element):
-            fail("occluded_target","Target was found but is not reported hittable; no tap was sent, so nothing on the phone changed. If the screen shows the target uncovered, tap tap_point with x/y; if an overlay, picker or fixed header covers it, deal with that first.",action_executed=False,target_rect=rect,tap_point={"x":round(cx),"y":round(cy)},viewport=viewport,recovery={"use":"coordinates","next_tool":"pua_tap","next_arguments":{"x":round(cx),"y":round(cy)},"replay_action":False})
+            fail("occluded_target","Target was found but is not reported hittable; no tap was sent, so nothing on the phone changed. If the screen shows the target uncovered, tap tap_point with x/y; if an overlay, picker or fixed header covers it, deal with that first.",action_executed=False,target_rect=rect,tap_point={"x":round(tap_x),"y":round(tap_y)},viewport=viewport,recovery={"use":"coordinates","next_tool":"pua_tap","next_arguments":{"x":round(tap_x),"y":round(tap_y)},"replay_action":False})
         if editable:
             if "type" not in element:element["type"]=self.client.session("GET",path+"/attribute/type")
             if element["type"] not in EDITABLE:
                 fail("not_editable","Select a readable text/search field or text view. Ask the user to handle secure fields.",secure_field=element["type"]=="XCUIElementTypeSecureTextField")
+        if is_switch:
+            element["type"]="XCUIElementTypeSwitch"
+            self.last_target={"matches":result["matches"],"chosen":"switch_knob","index":element["index"]}
         if self.screen is not None:
             if len(self._screen_targets)>=32:self._screen_targets.clear()
-            self._screen_targets[path]={"x":cx,"y":cy}
+            self._screen_targets[path]={"x":tap_x,"y":tap_y}
         element["path"]=path
         return element
 
@@ -576,11 +597,15 @@ class PhoneController:
         if selector is not None:
             if x is not None or y is not None:
                 fail("invalid_argument","Choose selector or coordinates.")
-            try:path=self.target(selector)
+            try:element=self.resolve(selector)
             except WDAError as error:
                 self.switch_to_coordinates(error);raise
             chosen=self.last_target
-            self.post(path+"/click",{})
+            if self.element_type(element) in ("XCUIElementTypeSwitch","Switch"):
+                rect=self.element_rect(element)
+                self.post("/wda/tap",{"x":round(rect["x"]+rect["width"]-26),"y":round(rect["y"]+rect["height"]/2)})
+            else:
+                self.post(element["path"]+"/click",{})
         else:
             finite(x,"x");finite(y,"y")
             viewport=self.guard(observation_id)
