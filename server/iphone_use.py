@@ -334,6 +334,7 @@ class Runtime:
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:raise WDAError("device_busy","Another iPhone Use operation is running. Wait for it to finish before continuing; no action was executed.")
             try:
+                self.phone.stop_watcher()
                 if cache_path.is_file() and hasattr(self.client,"session_id"):
                     try:
                         cached=json.loads(cache_path.read_text())
@@ -487,6 +488,10 @@ class Runtime:
         if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself, keep it awake, and verify READY again.")
         sid=self.client.ensure_session()
         observation=self.phone.observe("both" if screenshot else "tree")
+        obs_id=observation.get("observation_id")
+        nodes=self.phone.snapshots.get(obs_id,{}).get("nodes")
+        if nodes is not None:
+            self.phone.set_page_baseline(nodes,observation["viewport"],observation["app"],observation)
         if observation.get("total_nodes",0)==0 and self.setup_manager.mirroring_running():raise WDAError("mirroring_conflict","iPhone Mirroring is running and PUA exposes an empty phone tree. Quit Mirroring, unlock if needed, then verify READY again.")
         result={"ready":True,"state":"ready","proof":{"status_ready":True,"phone_unlocked":True,"session_usable":bool(sid),"foreground_resolved":True,"source_readable":True,"viewport_readable":True,"screenshot_readable":screenshot},"observation":observation}
         try:
@@ -592,7 +597,23 @@ class Runtime:
                 return result
             if op in ("tap","swipe","type_text","launch_app","press_button","screenshot","batch","scroll_find","collect_list"):
                 if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself before operations; observe again afterward.")
-            return getattr(self.phone,op)(**args)
+            result=getattr(self.phone,op)(**args)
+            if op=="observe":
+                if args.get("mode","tree") in ("tree","both") and isinstance(result,dict) and "observation_id" in result:
+                    obs_id=result["observation_id"]
+                    nodes=self.phone.snapshots.get(obs_id,{}).get("nodes")
+                    if nodes is not None:
+                        self.phone.set_page_baseline(nodes,result["viewport"],result["app"],result)
+                else:
+                    self.phone.clear_page_baseline()
+            elif op in ("tap","swipe","type_text","launch_app","press_button") and args.get("observe") in ("tree","both"):
+                if isinstance(result,dict) and "observation" in result:
+                    obs=result["observation"]
+                    obs_id=obs.get("observation_id")
+                    nodes=self.phone.snapshots.get(obs_id,{}).get("nodes")
+                    if nodes is not None:
+                        self.phone.set_page_baseline(nodes,obs["viewport"],obs["app"],obs)
+            return result
         except WDAError as exc:
             error=exc.code
             if exc.code=="phone_locked" or (exc.code=="not_editable" and exc.details.get("secure_field")):
@@ -642,7 +663,9 @@ class Runtime:
     def replied(self):self._replied_at=time.monotonic()
 
     def close(self):
-        try:self.screen.close();self.client.close()
+        try:
+            self.phone.stop_watcher();self.screen.close()
+            if hasattr(self.client,"close"):self.client.close()
         finally:self.analytics.close()
 
 

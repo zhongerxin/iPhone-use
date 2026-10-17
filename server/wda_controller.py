@@ -5,8 +5,10 @@ import datetime as dt
 from functools import wraps
 import json
 import math
+import os
 from pathlib import Path
 import re
+import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -147,6 +149,150 @@ def contains(outer,inner,slack=1):
             and inner["y"]+inner["height"]<=outer["y"]+outer["height"]+slack)
 
 
+MODAL_TYPES = ("Alert", "Sheet", "Popover")
+
+
+def sig_text(text):
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"\d+", "#", text)
+
+
+def node_text(n):
+    if "text" in n and isinstance(n["text"], str) and n["text"]:
+        return n["text"]
+    for k in ("label", "value", "name"):
+        v = n.get(k)
+        if v and isinstance(v, str):
+            return v
+    return ""
+
+
+def node_rect(n):
+    if "rect" in n and isinstance(n["rect"], dict):
+        r = n["rect"]
+        return float(r.get("x", 0)), float(r.get("y", 0)), float(r.get("width", 0)), float(r.get("height", 0))
+    if "rect" in n and isinstance(n["rect"], (list, tuple)) and len(n["rect"]) >= 4:
+        r = n["rect"]
+        return float(r[0]), float(r[1]), float(r[2]), float(r[3])
+    x = float(n.get("x", 0))
+    y = float(n.get("y", 0))
+    w = float(n.get("width", n.get("w", 0)))
+    h = float(n.get("height", n.get("h", 0)))
+    return x, y, w, h
+
+
+def page_sig(nodes, viewport=None):
+    if not nodes:
+        return {"v": 2, "title": [], "modal": [], "anchors": {}}
+    key_tops = []
+    for n in nodes:
+        if short_type(n.get("type", "")) == "Key":
+            key_tops.append(node_rect(n)[1])
+    kb = min(key_tops) if key_tops else None
+
+    seen = {}
+    for n in nodes:
+        st = short_type(n.get("type", ""))
+        t = node_text(n)
+        if not t:
+            continue
+        if st in ("NavigationBar", "Key") or st in MODAL_TYPES:
+            continue
+        r = node_rect(n)
+        if kb is not None and r[1] >= kb - 50:
+            continue
+        seen.setdefault(sig_text(t), []).append((n, r, t))
+
+    anchors = {}
+    for k, items in seen.items():
+        if len(items) == 1:
+            n, r, orig_t = items[0]
+            anchors[k] = [r[0], r[1], r[2], r[3], orig_t]
+
+    title = [
+        sig_text(node_text(n))
+        for n in nodes
+        if short_type(n.get("type", "")) == "NavigationBar"
+    ][:2]
+
+    modal = sorted(
+        sig_text(node_text(n) or short_type(n.get("type", "")))
+        for n in nodes
+        if short_type(n.get("type", "")) in MODAL_TYPES
+    )
+
+    return {
+        "v": 2,
+        "title": title,
+        "modal": modal,
+        "anchors": anchors
+    }
+
+
+def page_change(old, new):
+    if not old or not new or old.get("v") != 2 or new.get("v") != 2:
+        return None
+    if old.get("title") != new.get("title"):
+        return "title_changed"
+    if old.get("modal") != new.get("modal"):
+        return "popup_changed"
+    a, b = old.get("anchors", {}), new.get("anchors", {})
+    common = a.keys() & b.keys()
+    if len(a) >= 4 and len(common) < len(a) / 2:
+        return "content_replaced"
+    dys = sorted(b[k][1] - a[k][1] for k in common)
+    dxs = sorted(b[k][0] - a[k][0] for k in common)
+    if (dys and abs(dys[len(dys) // 2]) > 12) or (dxs and abs(dxs[len(dxs) // 2]) > 12):
+        return "scrolled"
+    return None
+
+
+def follow_coordinates(old_sig, new_sig, x, y, viewport):
+    if not old_sig or not new_sig:
+        return None
+    old_anchors = old_sig.get("anchors", {})
+    new_anchors = new_sig.get("anchors", {})
+
+    hits = []
+    for k, v in old_anchors.items():
+        rx, ry, rw, rh = v[0], v[1], v[2], v[3]
+        if rx <= x <= rx + rw and ry <= y <= ry + rh:
+            hits.append((rw * rh, k, v))
+
+    if not hits:
+        return None
+
+    min_area = min(h[0] for h in hits)
+    tied = [h for h in hits if abs(h[0] - min_area) < 1e-6]
+
+    displacements = []
+    texts = []
+    for area, k, old_v in tied:
+        if k not in new_anchors:
+            return None
+        new_v = new_anchors[k]
+        if abs(new_v[2] - old_v[2]) > 2 or abs(new_v[3] - old_v[3]) > 2:
+            return None
+        dx = new_v[0] - old_v[0]
+        dy = new_v[1] - old_v[1]
+        displacements.append((dx, dy))
+        texts.append(old_v[4] if len(old_v) > 4 else k)
+
+    first_dx, first_dy = displacements[0]
+    for dx, dy in displacements[1:]:
+        if abs(dx - first_dx) > 1e-6 or abs(dy - first_dy) > 1e-6:
+            return None
+
+    nx = round(x + first_dx)
+    ny = round(y + first_dy)
+
+    if not (0 <= nx < viewport["width"] and 0 <= ny < viewport["height"]):
+        return None
+
+    return nx, ny, texts[0]
+
+
 class PhoneController:
     def __init__(self, client, state_dir):
         self.client, self.state_dir = client, Path(state_dir)
@@ -167,18 +313,164 @@ class PhoneController:
         self.call_budget=CALL_BUDGET
         # Bounded host-side transition delay; never enable XCTest's idle wait.
         self.settle_seconds=0
+        self.page_signature=None
+        self.page_baseline_observation=None
+        self.page_baseline_app=None
+        self.page_baseline_nodes=None
+        self.page_baseline_viewport=None
+        self.eligible_for_page_check=False
+        self._watcher_state=None
+        self._watcher_thread=None
+        self._watcher_stop_event=None
+        self._wda_lock=threading.RLock()
+
+    def set_page_baseline(self,nodes,viewport,app,observation):
+        self.page_signature=page_sig(nodes,viewport)
+        self.page_baseline_observation=observation
+        self.page_baseline_app=app
+        self.page_baseline_nodes=nodes
+        self.page_baseline_viewport=viewport
+        self.eligible_for_page_check=True
+        self.start_watcher()
+
+    def clear_page_baseline(self):
+        self.stop_watcher()
+        self.page_signature=None
+        self.page_baseline_observation=None
+        self.page_baseline_app=None
+        self.page_baseline_nodes=None
+        self.page_baseline_viewport=None
+        self.eligible_for_page_check=False
+
+    def start_watcher(self):
+        self.stop_watcher()
+        if os.environ.get("IPHONE_USE_PAGE_WATCH","1")=="0":
+            return
+        if self.page_signature is None:
+            return
+        self._watcher_state={
+            "t":time.monotonic(),
+            "changed":None,
+            "tree":None,
+            "fails":0
+        }
+        self._watcher_stop_event=threading.Event()
+        self._watcher_thread=threading.Thread(
+            target=self._watch_worker,
+            daemon=True,
+            name="wda-page-watcher"
+        )
+        self._watcher_thread.start()
+
+    def stop_watcher(self):
+        event=self._watcher_stop_event
+        thread=self._watcher_thread
+        if event is not None:
+            event.set()
+        if thread is not None and thread.is_alive():
+            if threading.current_thread()!=thread:
+                thread.join(timeout=1.0)
+        self._watcher_thread=None
+        self._watcher_stop_event=None
+
+    def _watch_worker(self):
+        fails=0
+        base_sig=self.page_signature
+        base_app=self.page_baseline_app
+        stop_event=self._watcher_stop_event
+        if stop_event is None:
+            return
+        while not stop_event.is_set() and fails<5:
+            if stop_event.wait(0.02):
+                break
+            with self._wda_lock:
+                if stop_event.is_set():
+                    break
+                try:
+                    nodes,viewport=self.tree()
+                    app=self._source_app or self.active_app()
+                    fails=0
+                except Exception:
+                    fails+=1
+                    if self._watcher_state is not None:
+                        self._watcher_state["fails"]=fails
+                    continue
+
+            new_sig=page_sig(nodes,viewport)
+            why="title_changed" if (base_app and app and app!=base_app) else page_change(base_sig,new_sig)
+
+            self._watcher_state={
+                "t":time.monotonic(),
+                "changed":why,
+                "tree":(nodes,viewport,app),
+                "fails":fails
+            }
+            if why is not None:
+                break
+
+    def check_page_guard(self,cmd,selector=None,x=None,y=None,region=None):
+        if not self.eligible_for_page_check or self.page_signature is None:
+            return x,y,None
+
+        now=time.monotonic()
+        watch_enabled=os.environ.get("IPHONE_USE_PAGE_WATCH","1")!="0"
+        st=self._watcher_state
+        self._watcher_state=None
+
+        if (watch_enabled and st and st.get("t") is not None
+                and (now-st["t"])<=1.0 and st.get("changed") is None
+                and st.get("tree") is not None):
+            return x,y,None
+
+        with self._wda_lock:
+            nodes,viewport=self.tree()
+            app=self._source_app or self.active_app()
+        new_sig=page_sig(nodes,viewport)
+
+        why="title_changed" if (self.page_baseline_app and app and app!=self.page_baseline_app) else page_change(self.page_signature,new_sig)
+        if why is None:
+            return x,y,None
+
+        if why in ("title_changed","popup_changed"):
+            new_obs=self.observation_from_state(nodes,viewport,app,mode="tree")
+            self.set_page_baseline(nodes,viewport,app,new_obs)
+            stale(f"the page changed since your last observation ({why}); nothing was done",why,observation=new_obs)
+
+        if cmd=="tap" and selector is not None:
+            return x,y,None
+        if cmd=="type_text":
+            return x,y,None
+        if cmd=="swipe" and region is None:
+            return x,y,None
+        if cmd=="press_button":
+            return x,y,None
+        if cmd=="tap" and x is not None and y is not None:
+            hit=follow_coordinates(self.page_signature,new_sig,x,y,viewport)
+            if hit is not None:
+                nx,ny,text=hit
+                note={"text":text,"from":[round(x),round(y)],"to":[nx,ny],"reason":why}
+                return nx,ny,note
+            new_obs=self.observation_from_state(nodes,viewport,app,mode="tree")
+            self.set_page_baseline(nodes,viewport,app,new_obs)
+            stale(f"the page changed since your last observation ({why}); target could not be followed",why,observation=new_obs)
+
+        new_obs=self.observation_from_state(nodes,viewport,app,mode="tree")
+        self.set_page_baseline(nodes,viewport,app,new_obs)
+        stale(f"the page changed since your last observation ({why}); nothing was done",why,observation=new_obs)
 
     def external_action(self):
         """The user acted on the phone from the preview toolbar: earlier focus and geometry may be gone."""
         self.accepted_actions+=1
         self._viewport_cache=None
         self.pending_input=None
+        self.clear_page_baseline()
 
     def reset(self):
         """Forget context tied to a PUA session that was closed or replaced."""
         self.snapshots.clear()
         self._viewport_cache=None
         self.pending_input=None
+        self.clear_page_baseline()
 
     def screen_event(self,kind,**kwargs):
         # Display telemetry must never change, retry or delay a phone action
@@ -188,14 +480,15 @@ class PhoneController:
             except Exception:pass
 
     def post(self,path,payload,timeout=None,session=True):
-        if path=="/wda/tap":self.screen_event("tap",point={"x":payload["x"],"y":payload["y"]})
-        elif path.endswith("/click") and path[:-6] in self._screen_targets:
-            self.screen_event("tap",point=self._screen_targets[path[:-6]])
-        elif path=="/wda/dragfromtoforduration":
-            self.screen_event("drag",**{"from_point":{"x":payload["fromX"],"y":payload["fromY"]},"to_point":{"x":payload["toX"],"y":payload["toY"]},"duration_ms":max(300,min(3000,int((payload.get("duration",0)+.35)*1000)))})
-        result=self.client.session("POST",path,payload,timeout=timeout) if session else self.client.request("POST",path,payload,timeout=timeout)
-        self.accepted_actions+=1
-        return result
+        with self._wda_lock:
+            if path=="/wda/tap":self.screen_event("tap",point={"x":payload["x"],"y":payload["y"]})
+            elif path.endswith("/click") and path[:-6] in self._screen_targets:
+                self.screen_event("tap",point=self._screen_targets[path[:-6]])
+            elif path=="/wda/dragfromtoforduration":
+                self.screen_event("drag",**{"from_point":{"x":payload["fromX"],"y":payload["fromY"]},"to_point":{"x":payload["toX"],"y":payload["toY"]},"duration_ms":max(300,min(3000,int((payload.get("duration",0)+.35)*1000)))})
+            result=self.client.session("POST",path,payload,timeout=timeout) if session else self.client.request("POST",path,payload,timeout=timeout)
+            self.accepted_actions+=1
+            return result
 
     def viewport(self,max_age=0):
         cached=self._viewport_cache
@@ -232,45 +525,46 @@ class PhoneController:
         return app
 
     def tree(self, include_invisible=False, expensive_visibility=False):
-        # wdAccessible may query native accessibility for each node and its parents.
-        # It is unused by observations/collection; exclude the attribute, not nodes.
-        excluded=["accessible"]
-        if not expensive_visibility:
-            excluded.insert(0,"visible")
-        path="/source?format=xml&excluded_attributes="+",".join(excluded)
-        raw=self.client.session("GET",path)
-        if not isinstance(raw,str):
-            fail("invalid_response", "PUA source is not XML text.")
-        try:
-            tree=ET.fromstring(raw)
-        except ET.ParseError as exc:
-            fail("invalid_response", f"PUA XML parse failed: {exc}.")
-        root=tree.attrib if tree.attrib.get("type")=="XCUIElementTypeApplication" else {}
-        # The page source root names the foreground app and spans the screen, so one read
-        # usually answers what activeAppInfo and window/size would be asked separately.
-        bundle=root.get("bundleId")
-        self._source_app=bundle if isinstance(bundle,str) and bundle and not bundle.startswith("local.pid.") else None
-        viewport=self.source_viewport(root)
-        nodes=[]
-        for element in tree.iter():
-            a=element.attrib
-            if not any(a.get(k) for k in ("label","name","value")) and a.get("type") not in ("XCUIElementTypeAlert","XCUIElementTypeSheet"):
-                continue
+        with self._wda_lock:
+            # wdAccessible may query native accessibility for each node and its parents.
+            # It is unused by observations/collection; exclude the attribute, not nodes.
+            excluded=["accessible"]
+            if not expensive_visibility:
+                excluded.insert(0,"visible")
+            path="/source?format=xml&excluded_attributes="+",".join(excluded)
+            raw=self.client.session("GET",path)
+            if not isinstance(raw,str):
+                fail("invalid_response", "PUA source is not XML text.")
             try:
-                rect={k:float(a.get(k,0)) for k in ("x","y","width","height")}
-            except ValueError:
-                continue
-            if not all(math.isfinite(n) for n in rect.values()):
-                continue
-            intersects=rect["width"]>0 and rect["height"]>0 and rect["x"]<viewport["width"] and rect["y"]<viewport["height"] and rect["x"]+rect["width"]>0 and rect["y"]+rect["height"]>0
-            if not include_invisible and (not intersects or a.get("visible")=="false"):
-                continue
-            if a.get("type") in ("XCUIElementTypeApplication","XCUIElementTypeWindow"):
-                continue
-            node={k:a[k] for k in ("type","name","label","value","enabled","visible") if k in a}
-            node["rect"]=rect;node["in_viewport"]=intersects
-            nodes.append(node)
-        return nodes,viewport
+                tree=ET.fromstring(raw)
+            except ET.ParseError as exc:
+                fail("invalid_response", f"PUA XML parse failed: {exc}.")
+            root=tree.attrib if tree.attrib.get("type")=="XCUIElementTypeApplication" else {}
+            # The page source root names the foreground app and spans the screen, so one read
+            # usually answers what activeAppInfo and window/size would be asked separately.
+            bundle=root.get("bundleId")
+            self._source_app=bundle if isinstance(bundle,str) and bundle and not bundle.startswith("local.pid.") else None
+            viewport=self.source_viewport(root)
+            nodes=[]
+            for element in tree.iter():
+                a=element.attrib
+                if not any(a.get(k) for k in ("label","name","value")) and a.get("type") not in ("XCUIElementTypeAlert","XCUIElementTypeSheet"):
+                    continue
+                try:
+                    rect={k:float(a.get(k,0)) for k in ("x","y","width","height")}
+                except ValueError:
+                    continue
+                if not all(math.isfinite(n) for n in rect.values()):
+                    continue
+                intersects=rect["width"]>0 and rect["height"]>0 and rect["x"]<viewport["width"] and rect["y"]<viewport["height"] and rect["x"]+rect["width"]>0 and rect["y"]+rect["height"]>0
+                if not include_invisible and (not intersects or a.get("visible")=="false"):
+                    continue
+                if a.get("type") in ("XCUIElementTypeApplication","XCUIElementTypeWindow"):
+                    continue
+                node={k:a[k] for k in ("type","name","label","value","enabled","visible") if k in a}
+                node["rect"]=rect;node["in_viewport"]=intersects
+                nodes.append(node)
+            return nodes,viewport
 
     def region_nodes(self,nodes,region=None):
         if region:
@@ -311,6 +605,7 @@ class PhoneController:
         return result
 
     def observe(self,mode="tree",include_invisible=False,max_nodes=DEFAULT_MAX_NODES,expensive_visibility=False,snapshot_max_depth=None,snapshot_max_children=None):
+        self.stop_watcher()
         if mode not in ("tree","screenshot","both"):
             fail("invalid_argument","mode must be tree, screenshot or both.")
         integer(max_nodes,"max_nodes",1,500)
@@ -320,6 +615,7 @@ class PhoneController:
         if limits and mode=="screenshot":
             fail("invalid_argument","Snapshot limits require tree or both mode.",action_executed=False)
         if mode=="screenshot":
+            self.clear_page_baseline()
             app=self.active_app()
             nodes,viewport=[],self.viewport(VIEWPORT_TTL)
         else:
@@ -470,6 +766,8 @@ class PhoneController:
         error.details["recovery"]=recovery
 
     def find(self,selector,limit=10):
+        self.stop_watcher()
+        self.eligible_for_page_check=False
         integer(limit,"limit",1,30)
         found=self.query(selector,limit)
         return {"matches":found["matches"],"elements":[self.describe(element) for element in found["elements"][:limit]],
@@ -541,6 +839,8 @@ class PhoneController:
 
     @action_result
     def wait(self,selector,timeout_seconds=6):
+        self.stop_watcher()
+        self.eligible_for_page_check=False
         finite(timeout_seconds,"timeout_seconds",0,20)
         pred=predicate(selector)
         deadline=time.monotonic()+timeout_seconds;attempts=0
@@ -573,6 +873,11 @@ class PhoneController:
         if observe not in ("none","tree","screenshot","both"):
             fail("invalid_argument","Invalid observation mode.")
         if expect:predicate(expect)
+        self.stop_watcher()
+        nx,ny,note=self.check_page_guard("tap",selector=selector,x=x,y=y)
+        if nx is not None and ny is not None:
+            x,y=nx,ny
+        self.eligible_for_page_check=False
         if selector is not None:
             if x is not None or y is not None:
                 fail("invalid_argument","Choose selector or coordinates.")
@@ -590,6 +895,7 @@ class PhoneController:
             self.post("/wda/tap",{"x":x,"y":y})
         result=self.after(expect,observe)
         if chosen:result["target"]=chosen
+        if note:result["followed"]=note
         return result
 
     @action_result
@@ -598,6 +904,8 @@ class PhoneController:
             fail("invalid_argument","Use the app's verified bundle ID.")
         if observe not in ("none","tree","screenshot","both"):fail("invalid_argument","Invalid observe mode.")
         if not isinstance(verify,bool):fail("invalid_argument","verify must be boolean.")
+        self.stop_watcher()
+        self.clear_page_baseline()
         if expect:predicate(expect)
         self._viewport_cache=None
         self.post("/wda/apps/activate",{"bundleId":bundle_id},timeout=45)
@@ -619,6 +927,8 @@ class PhoneController:
 
     @action_result
     def screenshot(self):
+        self.stop_watcher()
+        self.eligible_for_page_check=False
         if self.screen is not None and self.screen.paused():
             fail("preview_paused","The preview is paused for authentication; no system screenshot was requested.",action_executed=False)
         # Consumer-page Snapshot event: iOS captures and saves on the device.
@@ -636,6 +946,9 @@ class PhoneController:
         if observe not in ("none","tree","screenshot","both"):fail("invalid_argument","Invalid observe mode.")
         if not isinstance(verify,bool):fail("invalid_argument","verify must be boolean.")
         if expect:predicate(expect)
+        self.stop_watcher()
+        self.check_page_guard("press_button")
+        self.eligible_for_page_check=False
         if name!="home":
             self.post("/wda/pressButton",{"name":name})
             return self.after(expect,observe)
@@ -677,6 +990,9 @@ class PhoneController:
         if observe not in ("none","tree","screenshot","both"):fail("invalid_argument","Invalid observe mode.")
         if not isinstance(verify,bool):fail("invalid_argument","verify must be boolean.")
         if expect:predicate(expect)
+        self.stop_watcher()
+        self.check_page_guard("type_text",selector=selector)
+        self.eligible_for_page_check=False
         try:path,kind=self.target(selector,editable=True,with_kind=True) if selector is not None else self.focused_field()
         except WDAError as error:
             self.switch_to_coordinates(error,typing=True);raise
@@ -834,6 +1150,9 @@ class PhoneController:
         integer(max_attempts,"max_attempts",1,2)
         if not isinstance(verify,bool):fail("invalid_argument","verify must be boolean.")
         if expect:predicate(expect)
+        self.stop_watcher()
+        self.check_page_guard("swipe",region=region)
+        self.eligible_for_page_check=False
         viewport=self.guard_region(observation_id,region) if observation_id is not None else None
         if verify:
             before,current_viewport=_baseline if _baseline is not None else self.tree()
@@ -944,6 +1263,7 @@ class PhoneController:
         return result
 
     def batch(self,steps):
+        self.stop_watcher()
         if not isinstance(steps,list) or not 1<=len(steps)<=20:
             fail("invalid_argument","steps must contain 1..20 operations.")
         allowed={"tap":self.tap,"swipe":self.swipe,"type_text":self.type_text,"launch_app":self.launch_app,"press_button":self.press_button,"wait":self.wait,"observe":self.observe,"scroll_find":self.scroll_find}

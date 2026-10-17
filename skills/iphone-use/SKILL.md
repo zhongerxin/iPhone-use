@@ -37,6 +37,13 @@ App 实际要求密码、PIN、验证码、Face ID / Touch ID，或手机需要�
 
 自绘内容、遮挡或缺失标签需要视觉判断时才取截图。截图随同一结果以图片返回，已缩放到适合阅读的尺寸：图像像素乘以 `image.pixel_to_point` 的 `[x, y]` 得到 iPhone 点，不要按原始分辨率或 Mac 屏幕换算。screenshot 跳过 XML；both 同时提供树和图。若 App 出现分享浮层，处理当前状态，不循环重复同一路径截图。
 
+## 动作前页面自动守卫
+
+在完整观察（非 region 观察）之后、下一个手势执行前，系统自动比对页面签名，防范异步刷新或弹窗导致误操作：
+- 标题变化或弹窗（Alert / Sheet / Popover）出现/消失：所有手势（tap、swipe、type_text、press_button 等）以 `stale_observation` 拒绝执行（`action_executed=false`），reason 为 `title_changed` 或 `popup_changed`，错误中附带当前页面的新观察作为新基线，直接据此重新决策，无需额外手动 observe。
+- 页面仅滚动（scrolled）或内容刷新（content_replaced）：按 selector 文字的 tap、type_text、不带 region 的 swipe、press_button 照常执行；按坐标的 tap 寻找旧观察中包含落点的最小唯一文字框，在新页面仍存在且尺寸稳定（偏差 ≤2pt）、仍在屏幕内时自动平移坐标跟随点击，结果附带 `followed` 信息（含 text、from、to、reason），无法跟随则拒绝。
+- 完整观察后启动后台比对线程（约 20ms 间隔），1 秒内无变化时手势前不再额外请求 `/source`；动作执行后不重复检查；`pua_launch_app` 清除页面基线；可通过 `IPHONE_USE_PAGE_WATCH=0` 关闭后台比对（仍保留手势前即时检查）。
+
 ## 界面异常时先看截图，再决定操作
 
 截图是界面异常的通用兜底。selector / 焦点失败、滚动后仍找不到可点击目标、滚动无进展、区域被遮挡或上下文改变、输入回读不符、预期页面没出现时，先查看结果里的当前截图，再决定下一次操作；没有可用截图时取一次 `pua_observe(mode="screenshot")`。不要先重读整树、换标签写法、增加滚动次数或原样重试。树被截断、坐标点击后明显没生效、页面与预期不一致时也按此流程处理。普通 `verified=false` 仍不是异常，不要求每步截图。
