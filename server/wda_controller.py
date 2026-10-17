@@ -136,9 +136,44 @@ def compact_node(node):
     if node.get("enabled") in ("false",False):result["enabled"]=False
     if node.get("visible") in ("false",False):result["visible"]=False
     if node.get("in_viewport") is False:result["in_viewport"]=False
+    if node.get("under_bar"):result["under_bar"]=True
     rect=node.get("rect")
     if rect:result["rect"]=[round(rect[key]) for key in ("x","y","width","height")]
     return result
+
+
+LIST_TYPES={"XCUIElementTypeScrollView","XCUIElementTypeTable","XCUIElementTypeCollectionView"}
+BAR_TYPES={"XCUIElementTypeTabBar","XCUIElementTypeToolbar","XCUIElementTypeSearchField"}
+
+
+def floating_cover(tree,viewport):
+    """Elements of a list that slid under an iOS 26 floating bottom bar (tab bar, toolbar, search field).
+
+    The bars float over the list, so rows below their top edge stay in the tree and may even report
+    hittable, but a touch there lands on the bar. Only list content can slide under a bar; the bar's
+    own buttons are outside any list. Returns (bar_top, covered elements) or (None, empty set).
+    """
+    in_list=set()
+    for element in tree.iter():
+        if element.get("type") in LIST_TYPES:
+            in_list.update(id(child) for child in element.iter() if child is not element)
+    tops=[]
+    for element in tree.iter():
+        if element.get("type") in BAR_TYPES and id(element) not in in_list:
+            try:y,h=float(element.get("y","")),float(element.get("height",""))
+            except ValueError:continue
+            # Some apps report a toolbar container as tall as the screen: only real bars count.
+            if 0<h<viewport["height"]*.3 and y>viewport["height"]*.6:tops.append(y)
+    if not tops:
+        return None,set()
+    top=min(tops)-14
+    covered=set()
+    for element in tree.iter():
+        if id(element) not in in_list:continue
+        try:y,h=float(element.get("y","")),float(element.get("height",""))
+        except ValueError:continue
+        if y+h/2>=top:covered.add(id(element))
+    return top,covered
 
 
 def contains(outer,inner,slack=1):
@@ -158,6 +193,7 @@ class PhoneController:
         self._screen_targets={}
         self._viewport_cache=None
         self._source_app=None
+        self.bar_top=None
         self._deadline=None
         self.pending_input=None
         self.last_target=None
@@ -251,6 +287,8 @@ class PhoneController:
         bundle=root.get("bundleId")
         self._source_app=bundle if isinstance(bundle,str) and bundle and not bundle.startswith("local.pid.") else None
         viewport=self.source_viewport(root)
+        bar_top,covered=floating_cover(tree,viewport)
+        self.bar_top=bar_top
         nodes=[]
         for element in tree.iter():
             a=element.attrib
@@ -269,6 +307,7 @@ class PhoneController:
                 continue
             node={k:a[k] for k in ("type","name","label","value","enabled","visible") if k in a}
             node["rect"]=rect;node["in_viewport"]=intersects
+            if id(element) in covered:node["under_bar"]=True
             nodes.append(node)
         return nodes,viewport
 
@@ -523,6 +562,11 @@ class PhoneController:
         if rect["width"]<=0 or rect["height"]<=0 or not (0<=cx<viewport["width"] and 0<=cy<viewport["height"]):
             fail("offscreen_target","Target center is outside the viewport. Scroll the actual list into view, observe again and re-find the target; a stopped batch has not completed its failed step.",action_executed=False,target_rect=rect,viewport=viewport,recovery={"next_tool":"pua_observe","next_arguments":{"mode":"both"},"replay_action":False})
         path="/element/"+quote(element["element_id"],safe="")
+        if cy>=viewport["height"]*.6:
+            # Low targets only: one fresh tree tells whether a floating bottom bar covers this row.
+            nodes,_=self.tree()
+            if any(node.get("under_bar") and all(abs(node["rect"][k]-rect[k])<=2 for k in ("x","y","width","height")) for node in nodes):
+                fail("occluded_target","Target is in a list under the floating bottom bar; a tap there would hit the bar. Swipe the list up a little and tap again; nothing was tapped.",action_executed=False,under_bar=True,bar_top=self.bar_top,target_rect=rect,viewport=viewport,recovery={"next_tool":"pua_swipe","next_arguments":{"direction":"up"},"replay_action":False})
         if not self.element_hittable(element):
             fail("occluded_target","Target was found but is not reported hittable; no tap was sent, so nothing on the phone changed. If the screen shows the target uncovered, tap tap_point with x/y; if an overlay, picker or fixed header covers it, deal with that first.",action_executed=False,target_rect=rect,tap_point={"x":round(cx),"y":round(cy)},viewport=viewport,recovery={"use":"coordinates","next_tool":"pua_tap","next_arguments":{"x":round(cx),"y":round(cy)},"replay_action":False})
         if editable:
@@ -576,7 +620,19 @@ class PhoneController:
         if selector is not None:
             if x is not None or y is not None:
                 fail("invalid_argument","Choose selector or coordinates.")
-            try:path=self.target(selector)
+            try:
+                try:path=self.target(selector)
+                except WDAError as error:
+                    if error.code!="occluded_target" or not error.details.get("under_bar"):raise
+                    # Lift the row once to mid-screen. The drag starts above the bar so it moves the list, not the bar.
+                    rect,height=error.details["target_rect"],error.details["viewport"]["height"]
+                    cy=rect["y"]+rect["height"]/2;x=error.details["viewport"]["width"]/2
+                    start=min(cy,error.details["bar_top"]-10)
+                    self.post("/wda/dragfromtoforduration",{"fromX":x,"fromY":start,"toX":x,"toY":start-(cy-height*.5),"duration":.2})
+                    self._viewport_cache=None
+                    try:path=self.target(selector)
+                    except WDAError as again:
+                        again.details["action_executed"]=True;raise
             except WDAError as error:
                 self.switch_to_coordinates(error);raise
             chosen=self.last_target
