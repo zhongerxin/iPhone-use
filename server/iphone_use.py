@@ -22,6 +22,7 @@ from wda_controller import CALL_BUDGET, DEFAULT_MAX_NODES, PhoneController, TYPI
 from wda_setup import SetupManager, state_directory
 from wda_apps import AppCatalog
 from wda_screen import ScreenHub
+import preview_fast
 import wda_image
 from analytics import Analytics
 
@@ -402,27 +403,43 @@ class Runtime:
         if self.client.request("GET","/wda/locked").get("value") is not False:
             self.screen.set_paused(True,reason="device_locked")
             raise WDAError("phone_locked","Unlock the iPhone before using the preview.",details={"action_executed":False})
-        viewport=self.phone.viewport()
-        if args["action"]=="viewport":return {"viewport":viewport}
+        # The classic path asks the phone per gesture; the opt-in fast path reuses the
+        # geometry for ten seconds. A probe always asks the phone, and a frame that
+        # disagrees with the cached geometry refreshes it once before the stale refusal,
+        # so a rotation keeps working immediately either way.
+        if args["action"]=="viewport":return {"viewport":self.phone.viewport()}
+        viewport=preview_fast.gesture_viewport(self.phone)
         if any(args[key]!=viewport[key] for key in ("width","height")):
-            raise WDAError("stale_viewport","The phone rotated. Wait for a fresh frame before trying again.",details={"action_executed":False})
+            viewport=self.phone.viewport()
+            if any(args[key]!=viewport[key] for key in ("width","height")):
+                raise WDAError("stale_viewport","The phone rotated. Wait for a fresh frame before trying again.",details={"action_executed":False})
         points=[(args["x"],args["y"])]
         if args["action"]=="drag":points.append((args["to_x"],args["to_y"]))
         if any(x>=viewport["width"] or y>=viewport["height"] for x,y in points):
             raise WDAError("invalid_argument","Pointer is outside the phone viewport.",details={"action_executed":False})
         token=self.screen.begin(args["action"])
         try:
-            if args["action"]=="tap":
-                # Synthesize a short touch directly; XCTest's convenience tap
-                # adds synchronization overhead to interactive pointer input.
-                self.phone.screen_event("tap",point={"x":args["x"],"y":args["y"]})
-                self.phone.post("/actions",{"actions":[{"type":"pointer","id":"preview-finger",
-                    "parameters":{"pointerType":"touch"},"actions":[
-                        {"type":"pointerMove","duration":0,"origin":"viewport","x":args["x"],"y":args["y"]},
-                        {"type":"pointerDown","button":0},
-                        {"type":"pause","duration":50},
-                        {"type":"pointerUp","button":0}]}]})
-            else:self.phone.post("/wda/dragfromtoforduration",{"fromX":args["x"],"fromY":args["y"],"toX":args["to_x"],"toY":args["to_y"],"duration":args["duration"]})
+            # The opt-in fast path answers before injection; Unavailable means the flag is
+            # off or the runner has no such route, and the classic gesture runs unchanged.
+            try:
+                if args["action"]=="tap":
+                    self.phone.screen_event("tap",point={"x":args["x"],"y":args["y"]})
+                    preview_fast.tap(self.phone,args["x"],args["y"])
+                else:
+                    preview_fast.drag(self.phone,args["x"],args["y"],args["to_x"],args["to_y"],
+                                      args.get("duration") or 400)
+            except preview_fast.Unavailable:
+                if args["action"]=="tap":
+                    # Synthesize a short touch directly; XCTest's convenience tap
+                    # adds synchronization overhead to interactive pointer input.
+                    self.phone.screen_event("tap",point={"x":args["x"],"y":args["y"]})
+                    self.phone.post("/actions",{"actions":[{"type":"pointer","id":"preview-finger",
+                        "parameters":{"pointerType":"touch"},"actions":[
+                            {"type":"pointerMove","duration":0,"origin":"viewport","x":args["x"],"y":args["y"]},
+                            {"type":"pointerDown","button":0},
+                            {"type":"pause","duration":50},
+                            {"type":"pointerUp","button":0}]}]})
+                else:self.phone.post("/wda/dragfromtoforduration",{"fromX":args["x"],"fromY":args["y"],"toX":args["to_x"],"toY":args["to_y"],"duration":args["duration"]})
             return {"ok":True,"action":args["action"],"action_executed":True}
         except WDAError as error:
             error.details.update({"uncertain":True,"action_complete":False,"verification_required":"Inspect the phone before another gesture; do not replay automatically."})
