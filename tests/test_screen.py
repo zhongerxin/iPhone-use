@@ -82,7 +82,7 @@ class ScreenHubTests(unittest.TestCase):
 
     def test_start_never_creates_capture_or_returns_cached_base64(self):
         with patch.object(self.hub, "_command") as command:
-            self.hub._frame = {"seq": 1, "data": "private pixels"}
+            self.hub._frame = {"seq": 1, "data": "private pixels", "_epoch": self.hub._read_state()["access_epoch"]}
             self.assertIsNone(self.hub.start()["frame"])
             command.assert_not_called()
             self.assertIsNone(self.hub._thread)
@@ -109,7 +109,7 @@ class ScreenHubTests(unittest.TestCase):
             self.assertFalse(any(self.directory.glob("*.jpg")))
 
     def test_restart_returns_lower_sequence_with_a_new_stream_identity(self):
-        self.hub._frame={"seq":1,"data":"private pixels","mimeType":"image/jpeg","width":440,"height":956}
+        self.hub._frame={"seq":1,"data":"private pixels","mimeType":"image/jpeg","width":440,"height":956,"_epoch":self.hub._read_state()["access_epoch"]}
         result=self.hub._wire(self.hub._read_state(),after_seq=800)
         self.assertEqual(result["frame"]["seq"],1)
         self.assertTrue(result["frame_available"])
@@ -227,6 +227,47 @@ class ScreenHubTests(unittest.TestCase):
         finally:
             other.close()
 
+    def test_cross_process_pause_resume_rejects_old_cached_and_late_captured_pixels(self):
+        other = ScreenHub(self.directory)
+        self.addCleanup(other.close)
+        stop = threading.Event()
+        epoch = self.hub._read_state()["access_epoch"]
+        self.hub._publish_frame(jpeg(payload=b"before"), 440, 956, stop, epoch=epoch)
+        self.assertTrue(self.hub.start()["frame_available"])
+
+        # Pause and resume before this hub can observe the intermediate pause.
+        other.set_paused(True)
+        paused = other._read_state()
+        self.assertGreater(paused["access_epoch"], epoch)
+        other.set_paused(False)
+        resumed = self.hub._read_state()
+        self.assertGreater(resumed["access_epoch"], paused["access_epoch"])
+        self.assertIsNone(self.hub._wire(resumed)["frame"])
+        self.assertFalse(self.hub._wire(resumed)["frame_available"])
+        self.hub._publish_frame(jpeg(payload=b"captured-before-pause"), 440, 956, stop, epoch=epoch)
+        self.assertIsNone(self.hub._wire(self.hub._read_state())["frame"])
+
+        self.hub._publish_frame(jpeg(payload=b"after"), 440, 956, stop, epoch=resumed["access_epoch"])
+        fresh = self.hub._wire(self.hub._read_state())["frame"]
+        self.assertEqual(base64.b64decode(fresh["data"]), jpeg(payload=b"after"))
+        self.assertNotIn("_epoch", fresh)
+
+    def test_identical_pixels_captured_after_cross_process_resume_get_the_new_epoch(self):
+        other = ScreenHub(self.directory)
+        self.addCleanup(other.close)
+        stop = threading.Event()
+        epoch = self.hub._read_state()["access_epoch"]
+        self.hub._publish_frame(jpeg(), 440, 956, stop, epoch=epoch)
+        previous_seq = self.hub._seq
+        other.set_paused(True)
+        other.set_paused(False)
+        resumed = self.hub._read_state()
+        self.hub._publish_frame(jpeg(), 440, 956, stop, epoch=resumed["access_epoch"])
+        fresh = self.hub._wire(resumed)["frame"]
+        self.assertIsNotNone(fresh)
+        self.assertGreater(fresh["seq"], previous_seq)
+        self.assertEqual(base64.b64decode(fresh["data"]), jpeg())
+
     def test_shared_activity_events_grace_expiry_and_private_geometry_only(self):
         other = ScreenHub(self.directory)
         try:
@@ -294,7 +335,7 @@ class ScreenHubTests(unittest.TestCase):
         self.assertFalse(self.hub._paused())
 
     def test_restart_drops_the_frame_and_announces_a_new_stream(self):
-        self.hub._frame = {"seq": 9, "_jpeg": jpeg(), "mimeType": "image/jpeg", "width": 440, "height": 956}
+        self.hub._frame = {"seq": 9, "_jpeg": jpeg(), "mimeType": "image/jpeg", "width": 440, "height": 956, "_epoch": self.hub._read_state()["access_epoch"]}
         self.hub._seq = 9
         before = self.hub.start()["stream_id"]
         self.hub.device = {"model": "iPhone 17 Pro Max"}

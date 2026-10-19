@@ -3,6 +3,7 @@
 import argparse
 import base64
 import collections
+import contextlib
 import fcntl
 import inspect
 import json
@@ -22,6 +23,8 @@ from wda_controller import CALL_BUDGET, DEFAULT_MAX_NODES, PhoneController, TYPI
 from wda_setup import SetupManager, state_directory
 from wda_apps import AppCatalog
 from wda_screen import ScreenHub
+from wda_access import AccessGate
+from wda_auth import AuthWaiter
 import wda_image
 from analytics import Analytics
 
@@ -94,7 +97,11 @@ SCHEMAS={
 BATCH_OPS=["tap","swipe","type_text","launch_app","press_button","wait","observe","scroll_find"]
 SCHEMAS["batch"]=obj({"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"oneOf":[obj({"op":{"type":"string","const":op},"args":SCHEMAS[op]},("op","args")) for op in BATCH_OPS]}}},("steps",))
 SCHEMAS["ready"]["examples"]=[{"recover":True,"screenshot":False}]
-SCHEMAS["screen"]=obj({"action":string("Default open displays the live iPhone sidebar. Pause before password/Face ID takeover; resume only after the user confirms completion.",enum=["open","pause","resume"])})
+SCHEMAS["screen"]=obj({"action":string("Open/pause; wait_auth checks phone evidence; resume is its alias.",enum=["open","pause","wait_auth","resume"]),
+ "bundle_id":string("Target App; no app switching."),
+ "ready_label":string("Known post-auth label."),
+ "auth_label":string("Auth heading that must disappear."),
+ "timeout":num(1,25)})
 SCHEMAS["screen_frame"]=obj({"after_seq":num(0,9007199254740991,"integer"),"last_event_id":num(0,9007199254740991,"integer")})
 SCHEMAS["screen_action"]=obj({
  "action":string("Preview controls: refresh, home, screenshot, refresh viewport geometry, or a user pointer tap/drag in iPhone points.",enum=["refresh","home","screenshot","tap","drag","viewport"]),
@@ -124,7 +131,7 @@ DESCRIPTIONS={
 DESCRIPTIONS["apps"]="Resolve a real bundle ID by installed-device inventory, bundled verified aliases, or Apple's Search API. Query app name before launch instead of guessing. Store metadata does not prove installation; check installed_verified and publisher/country."
 READS={"doctor","observe","find","wait","metrics","apps"}
 READS.update(("screen","screen_frame"))
-DESCRIPTIONS["screen"]="Open or reuse the live iPhone screen in the Codex side panel. No phone actions or UI controls. Pause the preview before password/Face ID user takeover; resume after explicit completion. READY also opens or reuses this view by default."
+DESCRIPTIONS["screen"]="Open/reuse iPhone preview. wait_auth checks phone evidence; READY opens preview too."
 DESCRIPTIONS["screen_frame"]="App-only cached live preview and action cursor events. Never reads XML, starts sessions or occupies the phone operation lock."
 DESCRIPTIONS["screen_action"]="App-only toolbar of the live preview, pressed by the user: refresh the preview stream, send the iPhone Home, or copy a screenshot to the Mac clipboard. Refused while the preview is paused for authentication."
 
@@ -289,6 +296,10 @@ class Runtime:
         self.apps=AppCatalog(self.state_dir,self.setup_manager)
         self.screen=ScreenHub(self.state_dir)
         self.phone.screen=self.screen
+        self.access=AccessGate(self.screen)
+        self.client.access=self.access
+        self.phone.access_check=self.access.check
+        self._context_epoch=None
         self.phone.settle_seconds=setting("WDA_SETTLE_SECONDS",SETTLE_SECONDS,0,2)
         self.phone.call_budget=setting("WDA_CALL_BUDGET_SECONDS",CALL_BUDGET,5,240)
         self.phone.typing_frequency=int(setting("WDA_TYPING_FREQUENCY",TYPING_FREQUENCY,5,120))
@@ -298,13 +309,28 @@ class Runtime:
         self._device_lookup=None
         self.analytics=Analytics(self.state_dir,VERSION)
 
-    def call(self,name,args):
+    def call(self,name,args,received_epoch=None):
+        self.access.local.token=None
         started=time.monotonic();data=None;error=None
         try:
+            if not isinstance(name,str) or not name.startswith("pua_") or name[4:] not in SCHEMAS:raise WDAError("unknown_tool","Unknown PUA tool.")
+            validate(args,SCHEMAS[name[4:]]);validate_semantics(name[4:],args)
+            token=self.access.begin(name,args,received_epoch)
+            if not token["safe"] and self._context_epoch != token["epoch"]:
+                self.phone.reset()
+                self._context_epoch=token["epoch"]
+            self.phone.access_check=self.access.check
             data=self._dispatch(name,args)
+            self.access.check()
             return data
         except WDAError as exc:
             error=exc.code
+            if exc.code=="phone_locked":
+                if self.access.token():self.access.token().update(safe=True,preview=False)
+                # The local automatic pause invalidates this call. Return only a
+                # safe lock hint, never a nested observation from the exception.
+                raise WDAError("phone_locked","Unlock the iPhone yourself, then verify READY again.", uncertain=bool(self.access.token() and self.access.token()["mutation"]), details={"action_executed":"unknown" if self.access.token() and self.access.token()["mutation"] else False,"replay_action":False}) from None
+            self.access.check()
             raise
         except Exception:
             error="internal_error"
@@ -325,7 +351,12 @@ class Runtime:
         if name=="pua_screen":
             action=args.get("action","open")
             if action=="pause":self.screen.set_paused(True)
-            elif action=="resume":self.screen.set_paused(False)
+            elif action in ("wait_auth","resume"):
+                # resume is an alias: an MCP argument cannot clear a pause by itself.
+                result=AuthWaiter(self).wait(**{k:v for k,v in args.items() if k!="action"})
+                # Legacy resume callers on an unpaused preview still get its status.
+                if action=="resume" and result["state"]=="not_paused":result={**self.screen.start(),**result}
+                return {**result,"confirmation_required":False,"runtime_version":VERSION}
             return self.screen.start()
         lock_path=self.state_dir/"operation.lock"
         cache_path=self.state_dir/"session.json"
@@ -434,22 +465,13 @@ class Runtime:
     def screen_action(self,action):
         """Toolbar of the preview App: the user's own click, outside the model's tool sequence."""
         if action=="refresh":
-            pause_id=self.screen.reconnect_pause_id()
-            state=self.screen.restart()
-            probe=WDAClient(self.base_url,timeout=2)
-            try:
-                ready=(probe.request("GET","/status").get("value") or {}).get("ready") is True
-                if ready:
-                    if probe.request("GET","/wda/locked").get("value") is False:
-                        # Clicking refresh is the user's explicit request to resume.
-                        self.screen.resume_after_unlock(pause_id,explicit=True)
-                    else:self.screen.set_paused(True,reason="device_locked")
-            except WDAError:ready=False
-            finally:probe.close()
-            return {"ok":True,"action":action,"service_ready":ready,**state,**self.screen.pause_status()}
+            # App-only visibility is not a user-consent signal.
+            self.access.check()
+            return {"ok":True,"action":action,**self.screen.restart()}
         if self.screen.paused():
             raise WDAError("preview_paused","The preview is paused while the user authenticates on the iPhone. No capture or phone action was made.",details={"action_executed":False})
         client=WDAClient(self.base_url,timeout=8)
+        client.access=self.access
         try:
             if action=="home":
                 lock_path=self.state_dir/"operation.lock"
@@ -466,7 +488,7 @@ class Runtime:
             except (ValueError,TypeError):raise WDAError("invalid_response","Invalid screenshot encoding.")
             size=wda_image.png_size(data[:32])
             if size is None:raise WDAError("invalid_response","PUA screenshot is not PNG.")
-            copy_png(self.state_dir,data)
+            with self.access.delivery():copy_png(self.state_dir,data)
             return {"ok":True,"action":action,"copied":True,"width":size[0],"height":size[1]}
         finally:client.close()
 
@@ -485,6 +507,7 @@ class Runtime:
         status=self.client.request("GET","/status").get("value") or {}
         if status.get("ready") is not True:raise WDAError("not_ready","PUA is not accepting commands. Run pua_doctor and inspect setup status.")
         if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself, keep it awake, and verify READY again.")
+        if lock_pause:self.access.unlocked(lock_pause)
         sid=self.client.ensure_session()
         observation=self.phone.observe("both" if screenshot else "tree")
         if observation.get("total_nodes",0)==0 and self.setup_manager.mirroring_running():raise WDAError("mirroring_conflict","iPhone Mirroring is running and PUA exposes an empty phone tree. Quit Mirroring, unlock if needed, then verify READY again.")
@@ -579,7 +602,7 @@ class Runtime:
                 if result.get("ok") and args["action"]=="configure" and "local_port" in args:
                     self.base_url=candidate_url;self.setup_manager=manager
                     self.apps.setup_manager=manager
-                    self.client=WDAClient(self.base_url);self.phone.client=self.client
+                    self.client=WDAClient(self.base_url);self.client.access=self.access;self.phone.client=self.client
                 return result
             if op=="ready":
                 try:self.screen.start()
@@ -663,10 +686,10 @@ def result_content(data,structured=False):
     return result
 
 
-def tool_result(runtime,params):
+def tool_result(runtime,params,received_epoch=None):
     name=params.get("name")
     try:
-        data=runtime.call(name,params.get("arguments",{}))
+        data=runtime.call(name,params.get("arguments",{}),received_epoch=received_epoch)
         # The preview App reads structuredContent; frames never become model text.
         if name=="pua_screen_frame":return {"content":[],"structuredContent":data,"isError":False}
         result=result_content(data,structured=name in ("pua_screen","pua_screen_action"))
@@ -693,7 +716,7 @@ INSTRUCTIONS=(
  "Execute routine actions optimistically: observe=none and verify=false are defaults, verified=false/verification_deferred=true is normal and does not require a separate verification call. If the next decision needs the resulting page, request observe=tree/both in the action and inspect previous success while planning that next step. "
  "Chain known steps in batch; do not batch speculative repeated swipes toward an unknown target. Inspect the next page first, using a screenshot when tree truncation hides the boundary. explicit expect/verify opts into checking key outcomes. Send long text whole: when type_text returns input_complete=false, call it again with only continue_token; a batch stopped by input_continues or time_budget continues from stopped_at. "
  "Verify final critical results before reporting completion. Retry or replan only after observing a definite failure; never replay uncertain input/submission or an already executed multi-step operation wholesale. No_scroll_progress from explicit verification does not prove empty/complete data. "
- "For App passwords or Face ID call pua_screen(action=pause); phone_locked already auto-pauses the preview for device unlock, so do not overwrite that reason with an extra pause. Pause phone calls and use the available host question tool (request_user_input_async in Default), first option exactly 已完成继续. Wait for the actual user answer; async return or preselection is not confirmation. After the actual user completion answer, explicitly pua_screen(action=resume) for App authentication or legacy/unknown pause, then read fresh state. For device unlock run READY once; successful READY clears only its matching device_locked pause. READY/open never clear App authentication or unknown pause. Continue remaining work from that fresh state. "
+ "For App passwords or Face ID call pua_screen(action=pause), tell the user to finish on the phone, then keep calling pua_screen(action=wait_auth, bundle_id=target, ready_label=known_post_auth_label or auth_label=observed_auth_heading, timeout=25). Do not request a chat completion reply or any host confirmation. phone_locked already pauses as device_locked; wait_auth needs no label for that case. Waiting probes return only status, never field values, trees or screenshots. A waiting result is not completion: keep the current task active and repeat bounded waits. A cleared UI is not proof of login or business success: obtain fresh state and continue only the remaining authorized work. Never replay uncertain submissions. For unsupported/custom authentication do not guess a marker; report the detection limit. resume is an alias of wait_auth with the same phone-evidence checks; no call clears a pause without that evidence. "
  "Operation action_complete/verified fields do not mean the user's entire task is complete. Track all deliverables, give commentary progress and continue tools while work remains; final only after completion or a concrete blocker. For an unavailable MCP binding use the skill's direct Runtime fallback with the same operation lock."
 )
 
@@ -706,18 +729,23 @@ def serve(runtime):
     operation is still running. Phone tools stay strictly sequential.
     """
     writing=threading.Lock()
-    def send(response):
-        line=json.dumps(response,ensure_ascii=False,allow_nan=False)
-        with writing:print(line,flush=True)
+    def send(response,token=None):
+        with writing:
+            try:
+                with runtime.access.delivery(token) if token is not None else contextlib.nullcontext():
+                    print(json.dumps(response,ensure_ascii=False,allow_nan=False),flush=True)
+            except WDAError as exc:
+                response={"jsonrpc":"2.0","id":response["id"],"result":result_content({"error":exc.as_dict()},structured="structuredContent" in response.get("result",{}))}
+                print(json.dumps(response,ensure_ascii=False,allow_nan=False),flush=True)
     jobs=queue.Queue()
     def work():
         while True:
             job=jobs.get()
             if job is None:return
-            ident,params,arrived=job
-            result=tool_result(runtime,params)
+            ident,params,arrived,received_epoch=job
+            result=tool_result(runtime,params,received_epoch)
             runtime.note_response(params.get("name"),result,arrived)
-            send({"jsonrpc":"2.0","id":ident,"result":result})
+            send({"jsonrpc":"2.0","id":ident,"result":result},runtime.access.token())
             runtime.replied()
     worker=threading.Thread(target=work,name="wda-tools",daemon=True)
     worker.start()
@@ -725,14 +753,15 @@ def serve(runtime):
     # queueing input against a screen that may have changed in the meantime.
     screen_gate=threading.Lock()
     screen_worker=None
-    def screen_work(ident,params):
+    def screen_work(ident,params,received_epoch):
         try:
-            result=tool_result(runtime,params)
-            send({"jsonrpc":"2.0","id":ident,"result":result})
+            result=tool_result(runtime,params,received_epoch)
+            send({"jsonrpc":"2.0","id":ident,"result":result},runtime.access.token())
         finally:screen_gate.release()
     try:
         for line in sys.stdin:
             request=None
+            runtime.access.local.token=None
             try:
                 if len(line)>1024*1024:raise ValueError("Request exceeds 1 MiB")
                 request=json.loads(line,parse_constant=lambda x:(_ for _ in ()).throw(ValueError(x)))
@@ -757,13 +786,13 @@ def serve(runtime):
                 elif method=="tools/call":
                     arrived=time.monotonic()
                     if params.get("name") not in ("pua_screen_frame","pua_screen","pua_screen_action"):
-                        jobs.put((ident,params,arrived));continue
+                        jobs.put((ident,params,arrived,runtime.access.capture_epoch()));continue
                     if params.get("name")=="pua_screen_action" and isinstance(params.get("arguments"),dict) and params["arguments"].get("action") in ("tap","drag","viewport"):
                         if screen_gate.acquire(blocking=False):
-                            screen_worker=threading.Thread(target=screen_work,args=(ident,params),name="wda-screen-action",daemon=True)
+                            screen_worker=threading.Thread(target=screen_work,args=(ident,params,runtime.access.capture_epoch()),name="wda-screen-action",daemon=True)
                             screen_worker.start();continue
                         result=result_content({"error":{"code":"device_busy","message":"A screen action is already running."}},structured=True)
-                        send({"jsonrpc":"2.0","id":ident,"result":result});continue
+                        send({"jsonrpc":"2.0","id":ident,"result":result},runtime.access.token());continue
                     # Preview polls, its toolbar and opening or pausing the panel never wait behind a phone operation.
                     result=tool_result(runtime,params)
                     if params.get("name")=="pua_screen":
@@ -773,7 +802,7 @@ def serve(runtime):
                 response={"jsonrpc":"2.0","id":ident,"result":result}
             except WDAError as exc:response={"jsonrpc":"2.0","id":request.get("id") if isinstance(request,dict) else None,"error":{"code":-32602,"message":str(exc)}}
             except (ValueError,TypeError,KeyError):response={"jsonrpc":"2.0","id":request.get("id") if isinstance(request,dict) else None,"error":{"code":-32700 if request is None else -32600,"message":"Parse error" if request is None else "Invalid request"}}
-            send(response)
+            send(response,runtime.access.token())
     finally:
         # Finish the phone operation already accepted, then stop: its outcome must be reported.
         jobs.put(None);worker.join()
@@ -788,7 +817,12 @@ def main():
         if args.doctor or args.ready:
             try:data=runtime.call("pua_doctor" if args.doctor else "pua_ready",{})
             except WDAError as exc:data={"error":exc.as_dict()}
-            print(json.dumps(data,ensure_ascii=False));return 1 if "error" in data or (args.ready and data.get("ready") is not True) else 0
+            try:
+                with runtime.access.delivery():print(json.dumps(data,ensure_ascii=False))
+            except WDAError as exc:
+                data={"error":exc.as_dict()}
+                print(json.dumps(data,ensure_ascii=False))
+            return 1 if "error" in data or (args.ready and data.get("ready") is not True) else 0
         serve(runtime);return 0
     finally:runtime.close()
 

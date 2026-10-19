@@ -162,6 +162,7 @@ class PhoneController:
         self.pending_input=None
         self.last_target=None
         self.snapshot_restore=None
+        self.access_check=None
         self.typing_frequency=TYPING_FREQUENCY
         self.typing_piece=TYPING_PIECE
         self.call_budget=CALL_BUDGET
@@ -956,6 +957,7 @@ class PhoneController:
         self._deadline=time.monotonic()+self.call_budget
         try:
             for index,step in enumerate(steps):
+                if self.access_check:self.access_check()
                 if index and time.monotonic()>=self._deadline:
                     return {"completed_steps":len(results),"stopped_at":index,"stop_reason":"time_budget","results":results,"complete":False,
                             "next_step":"Send the steps from stopped_at onward in a new call. Completed steps were executed and must not be repeated."}

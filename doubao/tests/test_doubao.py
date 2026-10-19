@@ -46,7 +46,8 @@ class TextTests(unittest.TestCase):
         upstream = workbuddy_tests.pristine_server()
         tools = copy.deepcopy(upstream.TOOLS)
         mcp_stdio.adapt(upstream)
-        self.assertIn("interaction.ask", upstream.INSTRUCTIONS)
+        self.assertIn("action=wait_auth", upstream.INSTRUCTIONS)
+        self.assertNotIn("interaction.ask", upstream.INSTRUCTIONS)
         self.assertIn("Doubao Work side panel", upstream.INSTRUCTIONS + "".join(tool["description"] for tool in upstream.TOOLS))
         for word in OTHER_HOSTS:
             self.assertNotIn(word, upstream.INSTRUCTIONS + "".join(tool["description"] for tool in upstream.TOOLS))

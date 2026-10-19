@@ -28,7 +28,15 @@ def main():
     finally:
         if runtime:
             runtime.close()
-    print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    try:
+        if runtime:
+            with runtime.access.delivery():
+                print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+        else:
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    except PUAError as exc:
+        result = {"error": exc.as_dict()}
+        print(json.dumps(result, ensure_ascii=False, allow_nan=False))
     return 1 if "error" in result or (args.tool == "pua_ready" and result.get("ready") is not True) else 0
 
 

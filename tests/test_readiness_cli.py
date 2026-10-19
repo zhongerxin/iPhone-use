@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import iphone_use
 from wda_client import WDAError
+from wda_access import AccessGate
+from wda_screen import ScreenHub
 
 spec = importlib.util.spec_from_file_location("readiness_smoke", ROOT / "scripts" / "smoke_mcp.py")
 smoke = importlib.util.module_from_spec(spec)
@@ -43,6 +46,11 @@ class FakeChild:
 class ReadinessCLITests(unittest.TestCase):
     def server_main(self, data=None, error=None):
         runtime = Mock()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        screen = ScreenHub(directory.name)
+        self.addCleanup(screen.close)
+        runtime.access = AccessGate(screen)
         if error is not None:
             runtime.call.side_effect = error
         else:

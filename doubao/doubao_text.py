@@ -25,7 +25,6 @@ def retell(entries, told, where):
 INSTRUCTIONS = retell(base.INSTRUCTIONS, [
     base.INSTRUCTIONS[0][1],
     "Doubao Work shows the live iPhone screen in its side panel, opened by pua_screen(): READY does not open it. After the first READY in a chat call pua_screen() once so the user can watch; an open panel follows the phone by itself, so do not call pua_screen again to refresh it. ",
-    "use the host question tool (interaction.ask in Doubao Work; without one, ask in your reply and stop), first option exactly 已完成继续. Wait for the actual user answer; a skipped, timed-out or preselected question is not confirmation.",
 ], "INSTRUCTIONS")
 
 TOOL_DESCRIPTIONS = {
@@ -39,7 +38,6 @@ ASK = "宿主提问工具（豆包工作中为 `interaction.ask`；本对话没�
 SKILLS = {
     "skills/iphone-use/SKILL.md": retell(base.SKILLS["skills/iphone-use/SKILL.md"], [
         "豆包工作把手机屏幕显示在侧边栏，由 `pua_screen()` 打开，READY 不会打开它。本对话第一次 READY 成功后调用一次 `pua_screen()` 让用户观看；面板打开后自己跟随手机，暂停 / 恢复预览沿用同一个面板。已有面板时直接继续，不为刷新再调用 `pua_screen()`，也不要为打开画面重复 READY。",
-        f"必须调用{ASK}，首个选项固定「已完成继续」，第二个可为「暂时无法完成」。提问被跳过、超时或预选不是用户答复；",
         "豆包工作中直接调用 `mcp__iphone_use__pua_*` 工具，截图作为图片块随同一结果返回；点击、输入等失败结果同样附带图片块。如果结果里没有看到图片，用读取文件的工具打开返回的 `image.path` / `error.observation.image.path`；不能把图片元数据或 base64 当成看过截图。",
     ], "skills/iphone-use/SKILL.md") + [
         # Doubao Work can also operate apps on the Mac. The description is what tells a phone task apart.
@@ -47,11 +45,7 @@ SKILLS = {
          "description: 用户要在手机 / iPhone 上打开 App、搜索、点按、输入、发消息或读取内容时使用。通过 PUA（Phone Use Agent）MCP 工具高效操作真实 iPhone；"),
     ],
     "skills/iphone-use/references/authentication.md": retell(base.SKILLS["skills/iphone-use/references/authentication.md"], [
-        """在豆包工作中调用 `interaction.ask`，按该工具当前的实际 schema 填写；本对话没有提问工具时在回复里直接问并停下。例如当前明确显示 Face ID 时：
-
-- 问题：当前 App 需要 Face ID 验证。请在 iPhone 上完成认证并停留在目标页面；完成后选择「已完成继续」，我会接着读取剩余明细。
-- 选项：「已完成继续」、「暂时无法完成」""",
-        "以用户实际提交的选项或明确回复为准；提问被跳过、超时、没有答复，或工具在用户作答前就返回，都不能当作完成。",
+        f"{ASK}可按实际需要使用",
     ], "skills/iphone-use/references/authentication.md"),
     "skills/iphone-use/references/tool-fallback.md": retell(base.SKILLS["skills/iphone-use/references/tool-fallback.md"], [
         "普通版提供 18 个模型工具，豆包工作中名为 `mcp__iphone_use__pua_*`；先查看本回合实际可调用的工具绑定，不能只从 tools/list、文档或先前聊天推断已经绑定。豆包工作版由 `doubao/install.py` 安装到本机，再在「插件 · 技能 · 伙伴」里新建 STDIO 自定义连接器 `iphone_use` 接入；安装或更新后需要把该连接器关闭再打开，并新开任务；",

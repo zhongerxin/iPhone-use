@@ -35,6 +35,7 @@ class WDAClient:
         self._settings_session_id, self._settings_error = None, None
         self._settings_restore = {}
         self.records = collections.deque(maxlen=2000)
+        self.access = None
 
     def close(self):
         if self.connection:
@@ -108,6 +109,7 @@ class WDAClient:
                     raise
 
     def _request_once(self, method, path, payload, budget, readonly):
+        if self.access: self.access.before_request(method, path, readonly)
         started = time.monotonic()
         deadline = started + budget
         status, code, received = None, None, 0
@@ -142,6 +144,7 @@ class WDAClient:
                     break
                 chunks.append(chunk)
                 size += len(chunk)
+            if self.access: self.access.after_request(method, path)
             raw = b"".join(chunks)
             received = len(raw)
             # Python 3.9's read1 leaves fp open when Content-Length reaches zero.
@@ -163,12 +166,15 @@ class WDAClient:
                 raise WDAError("http_error", f"PUA returned HTTP {status}.", uncertain=not readonly)
             return result
         except WDAError as exc:
+            if exc.code == "access_paused": self.close()
+            if self.access: self.access.after_request(method, path)
             code = exc.code
             if exc.uncertain or exc.code == "response_too_large":
                 self.close()
             raise
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
             self.close()
+            if self.access: self.access.after_request(method, path)
             error = self.transport_error(exc, readonly)
             code = error.code
             raise error from exc

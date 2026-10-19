@@ -40,14 +40,18 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(process.stderr, "")
         return [json.loads(line) for line in process.stdout.splitlines()]
 
-    def runtime(self):
-        runtime = Runtime(self.directory.name)
+    def runtime(self, isolated=False):
+        directory = self.directory
+        if isolated:
+            directory = tempfile.TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+        runtime = Runtime(directory.name)
         self.addCleanup(runtime.close)
         client = FakeWDA()
         runtime.client = client
         # Restore a close method for Runtime cleanup; fake transports have no sockets.
         client.close = lambda: None
-        runtime.phone = PhoneController(client, self.directory.name)
+        runtime.phone = PhoneController(client, directory.name)
         return runtime, client
 
     def serve_ready(self, runtime, arguments):
@@ -107,7 +111,7 @@ class ProtocolTests(unittest.TestCase):
     def test_ready_refusal_lock_and_unknown_fault_remain_mcp_errors(self):
         for case, expected in (("owner", "pua_recovery_required"), ("locked", "phone_locked"), ("unknown", "device-fault")):
             with self.subTest(case=case):
-                runtime, client = self.runtime()
+                runtime, client = self.runtime(isolated=True)
                 manager = Mock()
                 manager.pending_recovery.return_value = None
                 manager.recover.return_value = {"ok": False, "error": "Service ownership could not be proven"}

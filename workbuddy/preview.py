@@ -81,12 +81,13 @@ def playback_hub(state_dir):
             self.recent = collections.deque(maxlen=4 * PLAYBACK_FRAMES)
             self.fresh = threading.Condition(self._lock)
 
-        def _publish_frame(self, raw, width, height, stop):
+        def _publish_frame(self, raw, width, height, stop, epoch=None):
             # One step under upstream's lock: a reader never meets a frame without its time.
             with self._lock:
                 previous = self._frame
-                super()._publish_frame(raw, width, height, stop)
+                super()._publish_frame(raw, width, height, stop, epoch)
                 if self._frame is not None and self._frame is not previous:
+                    self.recent = collections.deque((frame for frame in self.recent if frame.get("_epoch") == self._frame["_epoch"]), maxlen=4 * PLAYBACK_FRAMES)
                     self._frame["at"] = self._now()
                     self.recent.append(self._frame)
                     self.fresh.notify_all()
@@ -106,11 +107,11 @@ def playback_hub(state_dir):
                         self.recent.clear()
                 elif after_seq:
                     earlier = [frame for frame in self.recent
-                               if after_seq < frame["seq"] < newest["seq"] and newest["at"] - frame["at"] <= PLAYBACK_MS][-PLAYBACK_FRAMES:]
+                               if frame.get("_epoch") == shown["access_epoch"] and after_seq < frame["seq"] < newest["seq"] and newest["at"] - frame["at"] <= PLAYBACK_MS][-PLAYBACK_FRAMES:]
                     for frame in earlier:
                         if "data" not in frame:
                             frame["data"] = base64.b64encode(frame["_jpeg"]).decode("ascii")
-                    shown["more"] = [{key: value for key, value in frame.items() if key != "_jpeg"} for frame in earlier]
+                    shown["more"] = [{key: value for key, value in frame.items() if key not in ("_jpeg", "_epoch")} for frame in earlier]
             return shown
 
     return PlaybackHub(state_dir)
