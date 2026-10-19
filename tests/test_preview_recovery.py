@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -56,7 +57,7 @@ class PreviewRecoveryTests(unittest.TestCase):
         self.assertEqual([p for _, p, _ in self.client.actions()], ["/session"])
         self.assertFalse(any(p == "/screenshot" for _, p, _ in self.client.calls))
 
-    def test_explicit_and_legacy_pause_survive_ready_but_user_refresh_can_resume(self):
+    def test_authentication_and_legacy_pause_require_explicit_resume(self):
         for legacy in (False, True):
             with self.subTest(legacy=legacy):
                 self.hub.set_paused(False)
@@ -64,18 +65,23 @@ class PreviewRecoveryTests(unittest.TestCase):
                     self.hub._state_path.write_text(json.dumps({"paused": True}))
                 else:
                     self.runtime.call("pua_screen", {"action": "pause"})
-                self.lock_failure()
                 reason = "unknown" if legacy else "authentication"
+                before = list(self.client.calls)
+                for name, args in (("pua_ready", {"screenshot": False, "recover": False}),
+                                   ("pua_screen_action", {"action": "refresh"})):
+                    with self.assertRaises(WDAError) as caught:
+                        self.runtime.call(name, args)
+                    self.assertEqual(caught.exception.code, "access_paused")
+                self.assertEqual(self.client.calls, before)
                 self.assertEqual(self.other.start()["pause_reason"], reason)
-                self.client.locked = False
-                self.assertTrue(self.ready()["preview"]["paused"])
                 self.assertTrue(self.runtime.call("pua_screen", {})["paused"])
-                probe = FakeWDA()
-                probe.close = Mock()
-                with patch("iphone_use.WDAClient", return_value=probe):
-                    self.assertFalse(self.runtime.screen_action("refresh")["paused"])
-                self.assertEqual(probe.calls, [("GET", "/status", None), ("GET", "/wda/locked", None)])
-                self.assertFalse(self.runtime.call("pua_screen", {"action": "resume"})["paused"])
+                self.runtime.identify_device = Mock()
+                with patch("subprocess.run") as process:
+                    result = self.runtime.call("pua_screen", {"action": "resume"})
+                process.assert_not_called()
+                self.assertFalse(result["paused"])
+                self.assertFalse(self.hub.paused())
+                self.assertEqual(self.client.calls, before)
 
     def test_failed_health_check_does_not_clear_a_lock_pause(self):
         self.lock_failure()
@@ -97,33 +103,24 @@ class PreviewRecoveryTests(unittest.TestCase):
                     self.other.set_paused(True, reason=reason)
                     return result
                 with patch.object(self.runtime.phone, "observe", side_effect=concurrent_pause):
-                    result = self.ready()
-                self.assertTrue(result["ready"])
-                self.assertEqual(result["preview"], {"paused": True, "pause_reason": reason})
+                    with self.assertRaises(WDAError) as caught:
+                        self.ready()
+                self.assertEqual(caught.exception.code, "access_paused")
+                self.assertTrue(caught.exception.details["response_suppressed"])
+                self.assertNotIn("observation", caught.exception.details)
+                self.assertEqual(self.other.pause_status(), {"paused": True, "pause_reason": reason})
 
-    def test_user_refresh_resumes_only_a_verified_unlocked_lock_pause(self):
-        for condition in ("unlocked", "locked", "service_offline", "probe_error", "new_auth_pause"):
-            with self.subTest(condition=condition):
-                self.hub.set_paused(False)
-                self.lock_failure()
-                probe = FakeWDA()
-                probe.locked = condition == "locked"
-                probe.status_ready = condition != "service_offline"
-                probe.close = Mock()
-                request = probe.request
-                def checked(method, path, payload=None):
-                    if path == "/wda/locked":
-                        if condition == "probe_error":
-                            raise WDAError("pua_unreachable", "unavailable")
-                        if condition == "new_auth_pause":
-                            self.other.set_paused(True)
-                    return request(method, path, payload)
-                probe.request = checked
-                with patch("iphone_use.WDAClient", return_value=probe):
-                    result = self.runtime.screen_action("refresh")
-                self.assertEqual(result["paused"], condition != "unlocked")
-                self.assertEqual(probe.actions(), [])
-                self.assertFalse(any(p in ("/screenshot", "/source") for _, p, _ in probe.calls))
+    def test_refresh_cannot_clear_a_device_lock_pause_even_after_unlock(self):
+        self.lock_failure()
+        self.client.locked = False
+        before = list(self.client.calls)
+        with self.assertRaises(WDAError) as caught:
+            self.runtime.call("pua_screen_action", {"action": "refresh"})
+        self.assertEqual(caught.exception.code, "access_paused")
+        self.assertEqual(self.client.calls, before)
+        self.assertEqual(self.hub.pause_status(), {"paused": True, "pause_reason": "device_locked"})
+        self.assertTrue(self.ready()["ready"])
+        self.assertFalse(self.hub.paused())
 
     def test_pause_generation_is_private_and_survives_activity_transactions(self):
         self.hub.set_paused(True, reason="device_locked")

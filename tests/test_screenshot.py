@@ -52,7 +52,7 @@ class ScreenshotTests(unittest.TestCase):
         self.runtime.screen.set_paused(True)
         with self.assertRaises(WDAError) as caught:
             self.runtime.call("pua_screenshot", {})
-        self.assertEqual(caught.exception.code, "preview_paused")
+        self.assertEqual(caught.exception.code, "access_paused")
         self.assertEqual(self.client.actions(), [])
 
     def test_shared_operation_lock_refuses_concurrent_capture(self):

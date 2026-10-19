@@ -15,59 +15,48 @@ sys.path.insert(0, str(ROOT / "server"))
 from iphone_use import Runtime, SCREEN_URI, serve
 from wda_client import WDAError
 from wda_controller import PhoneController
+from wda_access import AccessGate
+from wda_screen import ScreenHub
 from test_controller import FakeWDA
 
 
-class MockScreen:
-    """Memory-only preview double: never captures or connects to a phone."""
-    def __init__(self):
+class MockScreen(ScreenHub):
+    """Real shared access state, with synthetic pixels and activity recording."""
+    def __init__(self, state_dir):
+        super().__init__(state_dir)
         self.events = []
-        self.is_paused = False
-        self.pause_reason = None
-        self.device = None
         self.closed = False
         self.frame_result = {"frame": {"seq": 7, "data": "preview-only",
                                       "mimeType": "image/jpeg", "width": 390, "height": 844},
                              "events": [], "busy": False, "paused": False}
 
+    @property
+    def is_paused(self):
+        return self.paused()
+
+    @is_paused.setter
+    def is_paused(self, value):
+        self.set_paused(value)
+
     def frame(self, **args):
         self.events.append(("frame", args))
-        return self.frame_result
+        return super().start() if self.paused() else self.frame_result
 
     def start(self):
         self.events.append(("start", {}))
-        return {"frame": None, "events": [], "busy": False, "paused": self.is_paused}
+        return super().start()
 
     def set_paused(self, paused, reason="authentication"):
-        self.is_paused = paused
-        self.pause_reason = reason if paused else None
         self.events.append(("pause", {"paused": paused}))
-
-    def pause_status(self):
-        return {"paused": self.is_paused, "pause_reason": self.pause_reason}
-
-    def locked_pause_id(self):
-        return "test-lock" if self.is_paused and self.pause_reason == "device_locked" else None
-
-    def reconnect_pause_id(self):
-        return "test-pause" if self.is_paused else None
-
-    def resume_after_unlock(self, expected_id, explicit=False):
-        if expected_id and (self.locked_pause_id() == expected_id or explicit):
-            self.is_paused = False
-            self.pause_reason = None
-            return True
-        return False
-
-    def paused(self):
-        return self.is_paused
+        return super().set_paused(paused, reason)
 
     def restart(self):
         self.events.append(("restart", {}))
-        return {"frame": None, "events": [], "busy": False, "paused": self.is_paused, "stream_id": "restarted"}
+        return super().restart()
 
     def set_viewport(self, viewport):
         self.events.append(("viewport", dict(viewport)))
+        return super().set_viewport(viewport)
 
     def begin(self, op):
         self.events.append(("begin", {"op": op}))
@@ -81,6 +70,7 @@ class MockScreen:
 
     def close(self):
         self.closed = True
+        super().close()
 
 
 class ScreenProtocolTests(unittest.TestCase):
@@ -88,16 +78,22 @@ class ScreenProtocolTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
 
-    def runtime(self):
-        runtime = Runtime(self.directory.name)
+
+    def runtime(self, isolated=False):
+        directory = self.directory
+        if isolated:
+            directory = tempfile.TemporaryDirectory()
+            self.addCleanup(directory.cleanup)
+        runtime = Runtime(directory.name)
         # Close the unused real preview before replacing it; no frame poll occurs.
         runtime.screen.close()
         client = FakeWDA()
         client.close = Mock()
         runtime.client = client
-        runtime.phone = PhoneController(client, self.directory.name)
-        screen = MockScreen()
+        runtime.phone = PhoneController(client, directory.name)
+        screen = MockScreen(directory.name)
         runtime.screen = screen
+        runtime.access = AccessGate(screen)
         runtime.phone.screen = screen
         self.addCleanup(runtime.close)
         return runtime, client, screen
@@ -188,7 +184,7 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertEqual(result["structuredContent"], screen.frame_result)
         self.assertEqual(client.calls, [])
 
-    def test_open_pause_resume_bypass_operation_lock_and_never_control_phone(self):
+    def test_open_pause_resume_bypass_operation_lock_without_a_dialog(self):
         runtime, client, screen = self.runtime()
         with (Path(self.directory.name) / "operation.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -197,8 +193,8 @@ class ScreenProtocolTests(unittest.TestCase):
             resumed = runtime.call("pua_screen", {"action": "resume"})
         self.assertTrue(paused["paused"])
         self.assertFalse(resumed["paused"])
+        self.assertFalse(screen.paused())
         self.assertEqual(client.calls, [])
-        self.assertEqual([kind for kind, _ in screen.events], ["start", "pause", "start", "pause", "start"])
 
     def test_ready_open_and_authentication_calls_share_one_host_widget_session(self):
         runtime, client, screen = self.runtime()
@@ -209,12 +205,14 @@ class ScreenProtocolTests(unittest.TestCase):
                                     ("pua_ready", {"screenshot": False, "recover": False}),
                                     ("pua_screen", {"action": "resume"})):
                 results.append(self.call_over_stdio(runtime, name, arguments))
-        identifiers = [result["_meta"]["openai/widgetSessionId"] for result in results]
+        identifiers = [result["_meta"]["openai/widgetSessionId"] for result in results if "_meta" in result]
         self.assertTrue(identifiers[0])
         self.assertEqual(len(set(identifiers)), 1)
         self.assertTrue(json.loads(results[0]["content"][0]["text"])["ready"])
         self.assertTrue(results[2]["structuredContent"]["paused"])
-        self.assertTrue(json.loads(results[3]["content"][0]["text"])["ready"])
+        self.assertTrue(results[3]["isError"])
+        self.assertEqual(json.loads(results[3]["content"][0]["text"])["error"]["code"], "access_paused")
+        self.assertNotIn("_meta", results[3])
         self.assertFalse(results[4]["structuredContent"]["paused"])
         # Session identity is host metadata only: it must not duplicate model data
         # or couple the display lifecycle to a phone session or user action.
@@ -326,10 +324,10 @@ class ScreenProtocolTests(unittest.TestCase):
     def test_authentication_takeover_errors_pause_preview_without_input(self):
         for secure_field in (False, True):
             with self.subTest(secure_field=secure_field):
-                runtime, client, screen = self.runtime()
+                runtime, client, screen = self.runtime(isolated=True)
                 if secure_field:
                     client.elements[0]["kind"] = "XCUIElementTypeSecureTextField"
-                    name, args, code = "pua_type_text", {"selector": {"label": "Target"}, "text": "never typed"}, "not_editable"
+                    name, args, code = "pua_type_text", {"selector": {"label": "Target"}, "text": "never typed"}, "access_paused"
                 else:
                     client.locked = True
                     name, args, code = "pua_tap", {"x": 100, "y": 220}, "phone_locked"
@@ -375,7 +373,7 @@ class ScreenProtocolTests(unittest.TestCase):
         screen.set_paused(True)
         with self.assertRaises(WDAError) as caught:
             runtime.call("pua_screen_action", {"action": "viewport"})
-        self.assertEqual(caught.exception.code, "preview_paused")
+        self.assertEqual(caught.exception.code, "access_paused")
 
     def test_pointer_actions_map_exact_points_and_invalidate_model_focus(self):
         runtime, client, screen = self.runtime()
@@ -396,10 +394,10 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertEqual(len(client.actions()), 2)
 
     def test_pointer_rejects_paused_locked_rotated_outside_and_malformed_input(self):
-        for change, code in [("paused", "preview_paused"), ("locked", "phone_locked"),
+        for change, code in [("paused", "access_paused"), ("locked", "phone_locked"),
                              ("rotated", "stale_viewport"), ("outside", "invalid_argument"),
                              ("extra", "invalid_argument"), ("nan", "invalid_argument")]:
-            runtime, client, screen = self.runtime()
+            runtime, client, screen = self.runtime(isolated=True)
             args = dict(action="tap", x=100, y=200, width=390, height=844)
             if change == "paused":screen.is_paused = True
             if change == "locked":client.locked = True
@@ -463,16 +461,17 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertFalse(caught.exception.details["action_executed"])
         self.assertEqual(phone.actions(), [])
 
-    def test_toolbar_refresh_restarts_only_the_preview_and_reports_service_state(self):
+    def test_toolbar_refresh_restarts_only_the_preview_without_wda_probes(self):
         runtime, client, screen = self.runtime()
         phone = self.toolbar(runtime)
+        before = screen._stream_id
         result = runtime.call("pua_screen_action", {"action": "refresh"})
-        self.assertEqual((result["ok"], result["service_ready"], result["stream_id"]), (True, True, "restarted"))
+        self.assertTrue(result["ok"])
+        self.assertNotEqual(result["stream_id"], before)
+        self.assertNotIn("service_ready", result)
         self.assertEqual([kind for kind, _ in screen.events], ["restart"])
-        self.assertEqual(phone.calls, [("GET", "/status", None), ("GET", "/wda/locked", None)])
+        self.assertEqual(phone.calls, [])
         self.assertEqual(client.calls, [])
-        phone.status_ready = False
-        self.assertFalse(runtime.call("pua_screen_action", {"action": "refresh"})["service_ready"])
 
     def test_toolbar_screenshot_copies_the_native_capture_and_leaves_no_file(self):
         runtime, client, screen = self.runtime()
@@ -499,19 +498,16 @@ class ScreenProtocolTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "clipboard_unavailable")
         self.assertFalse(list((Path(self.directory.name)).glob(".clipboard-*")))
 
-    def test_toolbar_blocks_actions_until_user_explicitly_reconnects(self):
+    def test_toolbar_including_refresh_cannot_bypass_authentication_pause(self):
         runtime, client, screen = self.runtime()
         phone = self.toolbar(runtime)
         screen.is_paused = True
-        for action in ("home", "screenshot"):
+        for action in ("home", "screenshot", "refresh"):
             with self.subTest(action=action), self.assertRaises(WDAError) as caught:
                 runtime.call("pua_screen_action", {"action": action})
-            self.assertEqual(caught.exception.code, "preview_paused")
+            self.assertEqual(caught.exception.code, "access_paused")
         self.assertEqual(phone.calls, [])
-        self.assertFalse(runtime.call("pua_screen_action", {"action": "refresh"})["paused"])
-        with self.assertRaises(WDAError) as caught:
-            runtime.call("pua_screen_action", {"action": "tap"})
-        self.assertEqual(caught.exception.code, "invalid_argument")
+        self.assertTrue(screen.paused())
 
     def test_toolbar_results_are_structured_for_the_app_and_answered_off_the_tool_queue(self):
         runtime, client, screen = self.runtime()
@@ -521,13 +517,17 @@ class ScreenProtocolTests(unittest.TestCase):
         screen.is_paused = True
         refused = self.call_over_stdio(runtime, "pua_screen_action", {"action": "home"})
         self.assertTrue(refused["isError"])
-        self.assertEqual(refused["structuredContent"]["error"]["code"], "preview_paused")
+        self.assertEqual(refused["structuredContent"]["error"]["code"], "access_paused")
         self.assertEqual(len(runtime.responses), 0)
 
     def test_slow_screen_action_does_not_block_frames_or_queue_more_input(self):
         started, polled = threading.Event(), threading.Event()
         runtime = Mock()
-        def call(name, args):
+        hub = ScreenHub(self.directory.name)
+        self.addCleanup(hub.close)
+        runtime.access = AccessGate(hub)
+        def call(name, args, received_epoch=None):
+            runtime.access.begin(name, args, received_epoch)
             if name == "pua_screen_action":
                 started.set()
                 if not polled.wait(2):

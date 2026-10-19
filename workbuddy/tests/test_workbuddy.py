@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -109,7 +110,7 @@ class HostTextTests(unittest.TestCase):
     def test_playback_still_fits_upstreams_screen_hub(self):
         sys.path.insert(0, str(ROOT / "server"))
         from wda_screen import ScreenHub
-        self.assertEqual(list(inspect.signature(ScreenHub._publish_frame).parameters), ["self", "raw", "width", "height", "stop"])
+        self.assertEqual(list(inspect.signature(ScreenHub._publish_frame).parameters), ["self", "raw", "width", "height", "stop", "epoch"])
         with tempfile.TemporaryDirectory() as state:
             hub = preview.playback_hub(state)
             self.addCleanup(hub.close)
@@ -118,6 +119,20 @@ class HostTextTests(unittest.TestCase):
             hub._publish_frame(b"\xff\xd8second", 4, 8, hub._stop)
             self.assertEqual([(frame["seq"], frame["width"], "at" in frame) for frame in hub.recent], [(1, 4, True), (2, 4, True)])
             self.assertEqual(hub._frame, hub.recent[-1])
+
+    def test_playback_rejects_late_frames_and_old_epoch_history(self):
+        with tempfile.TemporaryDirectory() as state:
+            hub = preview.playback_hub(state)
+            self.addCleanup(hub.close)
+            stop = threading.Event()
+            epoch = hub._read_state()["access_epoch"]
+            hub._publish_frame(b"before", 4, 8, stop, epoch)
+            hub.set_paused(True)
+            hub.set_paused(False)
+            hub._publish_frame(b"late", 4, 8, stop, epoch)
+            self.assertFalse(any(frame["_jpeg"] == b"late" for frame in hub.recent))
+            hub._publish_frame(b"after", 4, 8, stop, hub._read_state()["access_epoch"])
+            self.assertEqual([frame["_jpeg"] for frame in hub.recent], [b"after"])
 
     def test_only_a_frame_read_is_rerouted(self):
         channel = mcp_server.FrameResource(iter(()), None)

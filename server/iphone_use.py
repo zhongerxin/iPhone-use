@@ -3,6 +3,7 @@
 import argparse
 import base64
 import collections
+import contextlib
 import fcntl
 import inspect
 import json
@@ -22,6 +23,7 @@ from wda_controller import CALL_BUDGET, DEFAULT_MAX_NODES, PhoneController, TYPI
 from wda_setup import SetupManager, state_directory
 from wda_apps import AppCatalog
 from wda_screen import ScreenHub
+from wda_access import AccessGate
 import wda_image
 from analytics import Analytics
 
@@ -289,6 +291,10 @@ class Runtime:
         self.apps=AppCatalog(self.state_dir,self.setup_manager)
         self.screen=ScreenHub(self.state_dir)
         self.phone.screen=self.screen
+        self.access=AccessGate(self.screen)
+        self.client.access=self.access
+        self.phone.access_check=self.access.check
+        self._context_epoch=None
         self.phone.settle_seconds=setting("WDA_SETTLE_SECONDS",SETTLE_SECONDS,0,2)
         self.phone.call_budget=setting("WDA_CALL_BUDGET_SECONDS",CALL_BUDGET,5,240)
         self.phone.typing_frequency=int(setting("WDA_TYPING_FREQUENCY",TYPING_FREQUENCY,5,120))
@@ -298,13 +304,28 @@ class Runtime:
         self._device_lookup=None
         self.analytics=Analytics(self.state_dir,VERSION)
 
-    def call(self,name,args):
+    def call(self,name,args,received_epoch=None):
+        self.access.local.token=None
         started=time.monotonic();data=None;error=None
         try:
+            if not isinstance(name,str) or not name.startswith("pua_") or name[4:] not in SCHEMAS:raise WDAError("unknown_tool","Unknown PUA tool.")
+            validate(args,SCHEMAS[name[4:]]);validate_semantics(name[4:],args)
+            token=self.access.begin(name,args,received_epoch)
+            if not token["safe"] and self._context_epoch != token["epoch"]:
+                self.phone.reset()
+                self._context_epoch=token["epoch"]
+            self.phone.access_check=self.access.check
             data=self._dispatch(name,args)
+            self.access.check()
             return data
         except WDAError as exc:
             error=exc.code
+            if exc.code=="phone_locked":
+                if self.access.token():self.access.token().update(safe=True,preview=False)
+                # The local automatic pause invalidates this call. Return only a
+                # safe lock hint, never a nested observation from the exception.
+                raise WDAError("phone_locked","Unlock the iPhone yourself, then verify READY again.", uncertain=bool(self.access.token() and self.access.token()["mutation"]), details={"action_executed":"unknown" if self.access.token() and self.access.token()["mutation"] else False,"replay_action":False}) from None
+            self.access.check()
             raise
         except Exception:
             error="internal_error"
@@ -434,22 +455,13 @@ class Runtime:
     def screen_action(self,action):
         """Toolbar of the preview App: the user's own click, outside the model's tool sequence."""
         if action=="refresh":
-            pause_id=self.screen.reconnect_pause_id()
-            state=self.screen.restart()
-            probe=WDAClient(self.base_url,timeout=2)
-            try:
-                ready=(probe.request("GET","/status").get("value") or {}).get("ready") is True
-                if ready:
-                    if probe.request("GET","/wda/locked").get("value") is False:
-                        # Clicking refresh is the user's explicit request to resume.
-                        self.screen.resume_after_unlock(pause_id,explicit=True)
-                    else:self.screen.set_paused(True,reason="device_locked")
-            except WDAError:ready=False
-            finally:probe.close()
-            return {"ok":True,"action":action,"service_ready":ready,**state,**self.screen.pause_status()}
+            # App-only visibility is not a user-consent signal.
+            self.access.check()
+            return {"ok":True,"action":action,**self.screen.restart()}
         if self.screen.paused():
             raise WDAError("preview_paused","The preview is paused while the user authenticates on the iPhone. No capture or phone action was made.",details={"action_executed":False})
         client=WDAClient(self.base_url,timeout=8)
+        client.access=self.access
         try:
             if action=="home":
                 lock_path=self.state_dir/"operation.lock"
@@ -466,7 +478,7 @@ class Runtime:
             except (ValueError,TypeError):raise WDAError("invalid_response","Invalid screenshot encoding.")
             size=wda_image.png_size(data[:32])
             if size is None:raise WDAError("invalid_response","PUA screenshot is not PNG.")
-            copy_png(self.state_dir,data)
+            with self.access.delivery():copy_png(self.state_dir,data)
             return {"ok":True,"action":action,"copied":True,"width":size[0],"height":size[1]}
         finally:client.close()
 
@@ -485,6 +497,7 @@ class Runtime:
         status=self.client.request("GET","/status").get("value") or {}
         if status.get("ready") is not True:raise WDAError("not_ready","PUA is not accepting commands. Run pua_doctor and inspect setup status.")
         if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself, keep it awake, and verify READY again.")
+        if lock_pause:self.access.unlocked(lock_pause)
         sid=self.client.ensure_session()
         observation=self.phone.observe("both" if screenshot else "tree")
         if observation.get("total_nodes",0)==0 and self.setup_manager.mirroring_running():raise WDAError("mirroring_conflict","iPhone Mirroring is running and PUA exposes an empty phone tree. Quit Mirroring, unlock if needed, then verify READY again.")
@@ -579,7 +592,7 @@ class Runtime:
                 if result.get("ok") and args["action"]=="configure" and "local_port" in args:
                     self.base_url=candidate_url;self.setup_manager=manager
                     self.apps.setup_manager=manager
-                    self.client=WDAClient(self.base_url);self.phone.client=self.client
+                    self.client=WDAClient(self.base_url);self.client.access=self.access;self.phone.client=self.client
                 return result
             if op=="ready":
                 try:self.screen.start()
@@ -663,10 +676,10 @@ def result_content(data,structured=False):
     return result
 
 
-def tool_result(runtime,params):
+def tool_result(runtime,params,received_epoch=None):
     name=params.get("name")
     try:
-        data=runtime.call(name,params.get("arguments",{}))
+        data=runtime.call(name,params.get("arguments",{}),received_epoch=received_epoch)
         # The preview App reads structuredContent; frames never become model text.
         if name=="pua_screen_frame":return {"content":[],"structuredContent":data,"isError":False}
         result=result_content(data,structured=name in ("pua_screen","pua_screen_action"))
@@ -706,18 +719,23 @@ def serve(runtime):
     operation is still running. Phone tools stay strictly sequential.
     """
     writing=threading.Lock()
-    def send(response):
-        line=json.dumps(response,ensure_ascii=False,allow_nan=False)
-        with writing:print(line,flush=True)
+    def send(response,token=None):
+        with writing:
+            try:
+                with runtime.access.delivery(token) if token is not None else contextlib.nullcontext():
+                    print(json.dumps(response,ensure_ascii=False,allow_nan=False),flush=True)
+            except WDAError as exc:
+                response={"jsonrpc":"2.0","id":response["id"],"result":result_content({"error":exc.as_dict()},structured="structuredContent" in response.get("result",{}))}
+                print(json.dumps(response,ensure_ascii=False,allow_nan=False),flush=True)
     jobs=queue.Queue()
     def work():
         while True:
             job=jobs.get()
             if job is None:return
-            ident,params,arrived=job
-            result=tool_result(runtime,params)
+            ident,params,arrived,received_epoch=job
+            result=tool_result(runtime,params,received_epoch)
             runtime.note_response(params.get("name"),result,arrived)
-            send({"jsonrpc":"2.0","id":ident,"result":result})
+            send({"jsonrpc":"2.0","id":ident,"result":result},runtime.access.token())
             runtime.replied()
     worker=threading.Thread(target=work,name="wda-tools",daemon=True)
     worker.start()
@@ -725,14 +743,15 @@ def serve(runtime):
     # queueing input against a screen that may have changed in the meantime.
     screen_gate=threading.Lock()
     screen_worker=None
-    def screen_work(ident,params):
+    def screen_work(ident,params,received_epoch):
         try:
-            result=tool_result(runtime,params)
-            send({"jsonrpc":"2.0","id":ident,"result":result})
+            result=tool_result(runtime,params,received_epoch)
+            send({"jsonrpc":"2.0","id":ident,"result":result},runtime.access.token())
         finally:screen_gate.release()
     try:
         for line in sys.stdin:
             request=None
+            runtime.access.local.token=None
             try:
                 if len(line)>1024*1024:raise ValueError("Request exceeds 1 MiB")
                 request=json.loads(line,parse_constant=lambda x:(_ for _ in ()).throw(ValueError(x)))
@@ -757,13 +776,13 @@ def serve(runtime):
                 elif method=="tools/call":
                     arrived=time.monotonic()
                     if params.get("name") not in ("pua_screen_frame","pua_screen","pua_screen_action"):
-                        jobs.put((ident,params,arrived));continue
+                        jobs.put((ident,params,arrived,runtime.access.capture_epoch()));continue
                     if params.get("name")=="pua_screen_action" and isinstance(params.get("arguments"),dict) and params["arguments"].get("action") in ("tap","drag","viewport"):
                         if screen_gate.acquire(blocking=False):
-                            screen_worker=threading.Thread(target=screen_work,args=(ident,params),name="wda-screen-action",daemon=True)
+                            screen_worker=threading.Thread(target=screen_work,args=(ident,params,runtime.access.capture_epoch()),name="wda-screen-action",daemon=True)
                             screen_worker.start();continue
                         result=result_content({"error":{"code":"device_busy","message":"A screen action is already running."}},structured=True)
-                        send({"jsonrpc":"2.0","id":ident,"result":result});continue
+                        send({"jsonrpc":"2.0","id":ident,"result":result},runtime.access.token());continue
                     # Preview polls, its toolbar and opening or pausing the panel never wait behind a phone operation.
                     result=tool_result(runtime,params)
                     if params.get("name")=="pua_screen":
@@ -773,7 +792,7 @@ def serve(runtime):
                 response={"jsonrpc":"2.0","id":ident,"result":result}
             except WDAError as exc:response={"jsonrpc":"2.0","id":request.get("id") if isinstance(request,dict) else None,"error":{"code":-32602,"message":str(exc)}}
             except (ValueError,TypeError,KeyError):response={"jsonrpc":"2.0","id":request.get("id") if isinstance(request,dict) else None,"error":{"code":-32700 if request is None else -32600,"message":"Parse error" if request is None else "Invalid request"}}
-            send(response)
+            send(response,runtime.access.token())
     finally:
         # Finish the phone operation already accepted, then stop: its outcome must be reported.
         jobs.put(None);worker.join()
@@ -788,7 +807,12 @@ def main():
         if args.doctor or args.ready:
             try:data=runtime.call("pua_doctor" if args.doctor else "pua_ready",{})
             except WDAError as exc:data={"error":exc.as_dict()}
-            print(json.dumps(data,ensure_ascii=False));return 1 if "error" in data or (args.ready and data.get("ready") is not True) else 0
+            try:
+                with runtime.access.delivery():print(json.dumps(data,ensure_ascii=False))
+            except WDAError as exc:
+                data={"error":exc.as_dict()}
+                print(json.dumps(data,ensure_ascii=False))
+            return 1 if "error" in data or (args.ready and data.get("ready") is not True) else 0
         serve(runtime);return 0
     finally:runtime.close()
 
