@@ -7,13 +7,18 @@ import socket
 import time
 from urllib.parse import urlsplit
 
+import preview_fast
+
 # One element query answers with the fields target selection needs, so it replaces
 # separate rect and type reads. Both keys are handled by the pinned WDA's settings.
 ELEMENT_RESPONSE_ATTRIBUTES = "type,label,rect,enabled,attribute/name,attribute/value"
 SESSION_SETTINGS = {"waitForIdleTimeout": 0, "animationCoolOffTimeout": 0,
                     "snapshotMaxDepth": 50, "snapshotMaxChildren": 2147483647,
                     "shouldUseCompactResponses": False,
-                    "elementResponseAttributes": ELEMENT_RESPONSE_ATTRIBUTES}
+                    "elementResponseAttributes": ELEMENT_RESPONSE_ATTRIBUTES,
+                    # Empty unless IPHONE_USE_FAST_PREVIEW is set, so the classic preview
+                    # keeps whatever stream settings the runner already has.
+                    **preview_fast.stream_settings()}
 
 
 class WDAError(Exception):
