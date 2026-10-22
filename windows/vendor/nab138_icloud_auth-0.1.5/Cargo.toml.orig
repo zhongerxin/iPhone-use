@@ -1,0 +1,35 @@
+[package]
+name = "nab138_icloud_auth"
+version = "0.1.5"
+edition = "2021"
+description = "A library to authenticate with Apple's GSA servers"
+repository = "https://github.com/nab138/apple-private-apis"
+license = "MPL-2.0"
+
+[features]
+default = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+base64 = "0.22"
+srp = { version = "0.6.0", package = "nab138_srp" }
+pbkdf2 = "0.11"
+sha2 = "0.10"
+rand = "0.9"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rustls-pemfile = "2.2"
+plist = "1.7.2"
+hmac = "0.12.1"
+num-bigint = "0.4.3"
+cbc = { version = "0.1.2", features = ["std"] }
+aes = "0.8.2"
+pkcs7 = "0.4.1"
+reqwest = { version = "0.11.14", features = ["blocking", "json", "default-tls"] }
+omnisette = { version = "0.1.3", package = "nab138_omnisette" }
+thiserror = "2"
+tokio = "1"
+aes-gcm = "0.10.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
