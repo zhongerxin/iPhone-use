@@ -75,6 +75,25 @@ def action_result(function):
     return wrapped
 
 
+def tool_call(function):
+    @wraps(function)
+    def wrapped(self,*args,**kwargs):
+        is_top=getattr(self,"_tool_depth",0)==0
+        if is_top:
+            self._tool_depth=1
+            self.banners_dismissed=[]
+        else:
+            self._tool_depth+=1
+        try:
+            result=function(self,*args,**kwargs)
+            if is_top and isinstance(result,dict) and self.banners_dismissed:
+                result["banners_dismissed"]=list(self.banners_dismissed)
+            return result
+        finally:
+            self._tool_depth-=1
+    return wrapped
+
+
 def predicate_literal(value):
     # NSPredicate rejects literal line breaks inside quoted strings. Its Unicode
     # escapes preserve exact text, including a literal backslash followed by n.
@@ -167,6 +186,10 @@ class PhoneController:
         self.call_budget=CALL_BUDGET
         # Bounded host-side transition delay; never enable XCTest's idle wait.
         self.settle_seconds=0
+        self._expected_app=None
+        self.banners_dismissed=[]
+        self._tool_depth=0
+        self._sweeping_banner=False
 
     def external_action(self):
         """The user acted on the phone from the preview toolbar: earlier focus and geometry may be gone."""
@@ -179,6 +202,8 @@ class PhoneController:
         self.snapshots.clear()
         self._viewport_cache=None
         self.pending_input=None
+        self._expected_app=None
+        self.banners_dismissed.clear()
 
     def screen_event(self,kind,**kwargs):
         # Display telemetry must never change, retry or delay a phone action
@@ -224,13 +249,62 @@ class PhoneController:
         self._viewport_cache=(time.monotonic(),cached[1])
         return dict(cached[1])
 
+    @staticmethod
+    def _find_banner(tree):
+        root=tree.attrib if tree.attrib.get("type")=="XCUIElementTypeApplication" else {}
+        bundle=tree.attrib.get("bundleId") or root.get("bundleId")
+        if bundle!="com.apple.springboard":
+            return None
+        for elem in tree.iter():
+            label=elem.attrib.get("label")
+            kind=elem.attrib.get("type","")
+            if label=="Notification" or "Banner" in kind:
+                try:y=float(elem.attrib.get("y",9999))
+                except (ValueError,TypeError):y=9999
+                if y<=180:
+                    return elem
+        return None
+
+    @staticmethod
+    def _banner_text(elem):
+        for child in elem.iter():
+            label=child.attrib.get("label")
+            if isinstance(label,str) and ", " in label:
+                return label
+        own=elem.attrib.get("label")
+        if isinstance(own,str) and own:
+            return own
+        return None
+
+    @staticmethod
+    def _element_geometry(elem):
+        try:
+            rx=float(elem.attrib.get("x",0))
+            ry=float(elem.attrib.get("y",0))
+            rw=float(elem.attrib.get("width",0))
+            rh=float(elem.attrib.get("height",0))
+        except (ValueError,TypeError):
+            rx,ry,rw,rh=0.0,0.0,0.0,0.0
+        return rx,ry,rw,rh
+
+    @tool_call
     def active_app(self,timeout=None):
         result=self.client.request("GET", "/wda/activeAppInfo",timeout=timeout).get("value") or {}
         app=result.get("bundleId")
         if not isinstance(app,str) or not app or app.startswith("local.pid."):
             fail("pua_foreground_unavailable","PUA cannot resolve a running foreground application. This is a PUA/XCTest channel problem, not a selector or schema error.",foreground_app=app,recovery={"tool":"pua_ready","arguments":{"screenshot":False},"replay_action":False})
+        if not self._expected_app and app!="com.apple.springboard":
+            self._expected_app=app
+        if app=="com.apple.springboard" and self._expected_app and self._expected_app!="com.apple.springboard" and not self._sweeping_banner:
+            self._sweeping_banner=True
+            try:
+                self.tree()
+                app=self._source_app or app
+            finally:
+                self._sweeping_banner=False
         return app
 
+    @tool_call
     def tree(self, include_invisible=False, expensive_visibility=False):
         # wdAccessible may query native accessibility for each node and its parents.
         # It is unused by observations/collection; exclude the attribute, not nodes.
@@ -248,7 +322,32 @@ class PhoneController:
         root=tree.attrib if tree.attrib.get("type")=="XCUIElementTypeApplication" else {}
         # The page source root names the foreground app and spans the screen, so one read
         # usually answers what activeAppInfo and window/size would be asked separately.
-        bundle=root.get("bundleId")
+        bundle=root.get("bundleId") or tree.attrib.get("bundleId")
+        if not self._expected_app and bundle and bundle!="com.apple.springboard" and not bundle.startswith("local.pid."):
+            self._expected_app=bundle
+        if self._expected_app and self._expected_app!="com.apple.springboard" and bundle=="com.apple.springboard":
+            for _ in range(3):
+                banner=self._find_banner(tree)
+                if banner is None:
+                    break
+                text=self._banner_text(banner)
+                if text and text not in self.banners_dismissed:
+                    self.banners_dismissed.append(text)
+                rx,ry,rw,rh=self._element_geometry(banner)
+                cx=rx+rw/2;cy=ry+rh/2
+                self.post("/wda/dragfromtoforduration",{"fromX":cx,"fromY":cy,"toX":cx,"toY":cy-40,"duration":0.1})
+                time.sleep(0.35)
+                raw=self.client.session("GET",path)
+                if not isinstance(raw,str):
+                    fail("invalid_response","PUA source is not XML text.")
+                try:
+                    tree=ET.fromstring(raw)
+                except ET.ParseError as exc:
+                    fail("invalid_response",f"PUA XML parse failed: {exc}.")
+                root=tree.attrib if tree.attrib.get("type")=="XCUIElementTypeApplication" else {}
+                bundle=root.get("bundleId") or tree.attrib.get("bundleId")
+                if bundle and bundle!="com.apple.springboard":
+                    break
         self._source_app=bundle if isinstance(bundle,str) and bundle and not bundle.startswith("local.pid.") else None
         viewport=self.source_viewport(root)
         nodes=[]
@@ -281,6 +380,8 @@ class PhoneController:
         return nodes
 
     def remember(self,nodes,viewport,app,has_tree=True):
+        if not self._expected_app and app and app!="com.apple.springboard" and not app.startswith("local.pid."):
+            self._expected_app=app
         ident=uuid.uuid4().hex[:12]
         self.snapshots[ident]={"time":time.monotonic(),"viewport":viewport,"app":app,"nodes":nodes if has_tree else None}
         while len(self.snapshots)>32:
@@ -310,6 +411,7 @@ class PhoneController:
         if self.snapshot_restore:self.snapshot_restore({})
         return result
 
+    @tool_call
     def observe(self,mode="tree",include_invisible=False,max_nodes=DEFAULT_MAX_NODES,expensive_visibility=False,snapshot_max_depth=None,snapshot_max_children=None):
         if mode not in ("tree","screenshot","both"):
             fail("invalid_argument","mode must be tree, screenshot or both.")
@@ -469,6 +571,7 @@ class PhoneController:
         if recovery.get("next_tool")=="pua_tap" and not typing and error.code!="occluded_target" and "tap_point" in error.details:recovery["next_arguments"]=dict(error.details["tap_point"])
         error.details["recovery"]=recovery
 
+    @tool_call
     def find(self,selector,limit=10):
         integer(limit,"limit",1,30)
         found=self.query(selector,limit)
@@ -539,6 +642,7 @@ class PhoneController:
         element=self.resolve(selector,editable,found)
         return (element["path"],element["type"]) if editable and with_kind else element["path"]
 
+    @tool_call
     @action_result
     def wait(self,selector,timeout_seconds=6):
         finite(timeout_seconds,"timeout_seconds",0,20)
@@ -568,6 +672,7 @@ class PhoneController:
             result["observation"]=self.observe_after(observe,max_nodes=max_nodes)
         return result
 
+    @tool_call
     @action_result
     def tap(self,selector=None,x=None,y=None,observation_id=None,expect=None,observe="none"):
         if observe not in ("none","tree","screenshot","both"):
@@ -592,6 +697,7 @@ class PhoneController:
         if chosen:result["target"]=chosen
         return result
 
+    @tool_call
     @action_result
     def launch_app(self,bundle_id,expect=None,observe="none",verify=False):
         if not isinstance(bundle_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+",bundle_id):
@@ -599,6 +705,7 @@ class PhoneController:
         if observe not in ("none","tree","screenshot","both"):fail("invalid_argument","Invalid observe mode.")
         if not isinstance(verify,bool):fail("invalid_argument","verify must be boolean.")
         if expect:predicate(expect)
+        self._expected_app=bundle_id
         self._viewport_cache=None
         self.post("/wda/apps/activate",{"bundleId":bundle_id},timeout=45)
         if not verify:
@@ -617,6 +724,7 @@ class PhoneController:
         result.update(verified=True,verification_deferred=False,foreground_verified=True,verification_scope="Requested app is foreground; user task completion is separate.")
         return result
 
+    @tool_call
     @action_result
     def screenshot(self):
         if self.screen is not None and self.screen.paused():
@@ -629,6 +737,7 @@ class PhoneController:
                       next_step="Find the new screenshot in iPhone Photos or the app's photo picker and use it there. Check the saved image before reporting success; do not repeat an uncertain capture.")
         return result
 
+    @tool_call
     @action_result
     def press_button(self,name,observe="none",verify=False,expect=None):
         if name not in ("home","volumeup","volumedown"):
@@ -641,6 +750,7 @@ class PhoneController:
             return self.after(expect,observe)
         # XCTest pressButton can acknowledge Home without changing foreground.
         # WDA's dedicated endpoint activates the system application instead.
+        self._expected_app="com.apple.springboard"
         self._viewport_cache=None
         self.post("/wda/homescreen",{},session=False)
         if not verify:
@@ -662,6 +772,7 @@ class PhoneController:
             exc.details.update({"action_executed":True,"home_foreground_verified":app=="com.apple.springboard","verification_required":"Home was requested. Inspect fresh state before another action; do not automatically replay."})
             raise
 
+    @tool_call
     @action_result
     def type_text(self,selector=None,text=None,allow_newlines=False,submit=False,replace=True,observe="none",verify=False,expect=None,continue_token=None):
         if continue_token is not None:
@@ -827,6 +938,7 @@ class PhoneController:
                 return True
         return False
 
+    @tool_call
     @action_result
     def swipe(self,direction="up",region=None,observation_id=None,expect=None,verify=False,max_attempts=1,observe="none",_baseline=None,_max_nodes=DEFAULT_MAX_NODES):
         if direction not in ("up","down","left","right"):fail("invalid_argument","Invalid direction.")
@@ -884,6 +996,7 @@ class PhoneController:
         if observed:details["observation"]=observed
         fail("no_scroll_progress","Gestures executed but stable accessibility anchors did not show movement in the requested direction. The page may be an overview, boundary, blocked region or custom-rendered list. Changing numbers alone are not scroll progress. This does not prove an empty or complete list; inspect returned state before choosing the next action.",**details)
 
+    @tool_call
     @action_result
     def scroll_find(self,selector,direction="up",max_swipes=1):
         predicate(selector);integer(max_swipes,"max_swipes",0,10)
@@ -904,6 +1017,7 @@ class PhoneController:
         fail("search_exhausted","No hittable match after this search step. Inspect the screenshot before deciding whether to scroll again; do not automatically repeat the search or increase max_swipes.",
              swipes=count,max_swipes=max_swipes,stop_reason="visual_check_required",action_executed=count>0)
 
+    @tool_call
     @action_result
     def collect_list(self,row_type="Cell",max_pages=6,end_selector=None):
         integer(max_pages,"max_pages",1,10)
@@ -943,6 +1057,7 @@ class PhoneController:
             result.update({key:value for key,value in error.details.items() if key in ("observation","observation_error","recovery")})
         return result
 
+    @tool_call
     def batch(self,steps):
         if not isinstance(steps,list) or not 1<=len(steps)<=20:
             fail("invalid_argument","steps must contain 1..20 operations.")
@@ -971,3 +1086,6 @@ class PhoneController:
                     return {"completed_steps":len(results),"stopped_at":index,"stop_reason":exc.code,"error":exc.as_dict(),"results":results,"complete":False}
             return {"completed_steps":len(results),"results":results,"complete":True}
         finally:self._deadline=None
+
+
+WDAController = PhoneController
