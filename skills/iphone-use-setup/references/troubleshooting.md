@@ -21,7 +21,7 @@
 | pua_recovery_required，recovery.state=cooldown / manual | 冷却剩余时间、配置、worker 和监听端口归属、有效构建 | 120 秒冷却期间按 retry_after_seconds 诊断；归属不明或外部服务不得按端口杀进程，按返回的手动步骤恢复。 |
 | HTTP timeout 出现在点击、输入或提交后 | 下一次所需观察中的实际页面 / 字段 / 消息 | 输入 / 提交等可能已生效，先看实际结果再继续剩余步骤，不自动重放。纯查询可有界重读，不按 mutation 处理。 |
 | action_executed=true，action_complete=false | 至少一个已接收动作后的真实状态 | 即使 uncertain=false 也先回读，不重放完整输入、提交或批次；通道恢复只恢复读取 / 控制能力，不代替业务验收。 |
-| App 要求登录、密码或生物识别 | 目标 App 当前认证提示及正常入口 | 按 [认证接管与恢复](../../iphone-use/references/authentication.md) 提示用户亲自完成；接管期间暂停手机调用，收到完成通知后重新 observe 核对 App / 目标页并继续原任务。READY 不能代表 App 已登录，App 认证本身不需要重启 PUA。 |
+| App 要求登录、密码或生物识别 | 目标 App 当前认证提示及正常入口 | 按 [认证接管与恢复](../../iphone-use/references/authentication.md) 先区分明确授权的普通短信登录与必须亲自完成的认证；需要接管时暂停手机调用，收到完成通知后重新 observe 核对 App / 目标页并继续原任务。READY 不能代表 App 已登录，App 认证本身不需要重启 PUA。 |
 | PUA 可用，但控件树缺少内容，或标签定位失败 | 页面是否自绘、受保护或树是否截断 | 不换标签反复重试：按失败结果附带的截图改用坐标点击；输入则先点中输入框，再调用不带 selector 的 `pua_type_text`。仍无法观察则报告具体限制。 |
 
 status 返回 `jobs` 数组，用 id 匹配请求的 job_id，不读取不存在的单个 job 或吞掉解析异常。fetch / build 查看完成或失败终态；普通 start 是长期运行服务，`service.ready=true` 后调用 READY 即可，不等 Runner 变 succeeded。恢复工作按 recovery_phase=serving 后重验 READY。查询依据当前阶段、日志和 retry_after_seconds，不固定长间隔反复等、不重复 start。
