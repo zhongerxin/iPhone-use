@@ -68,7 +68,7 @@ class WDAClient:
         elif isinstance(exc, (ConnectionError, http.client.RemoteDisconnected, http.client.IncompleteRead)) or (
                 isinstance(exc, OSError) and exc.errno in (errno.ENOTCONN, errno.ENETUNREACH, errno.EHOSTUNREACH)):
             kind = "pua_unreachable"
-            message = "PUA HTTP connection was refused or interrupted; this does not prove USB was unplugged."
+            message = "PUA HTTP connection was refused or interrupted; this does not prove the USB cable or Wi-Fi path was disconnected."
             recovery = {"next_tool": "pua_setup", "next_arguments": {"action": "status"},
                         "replay_action": False,
                         "next_step": "Inspect service and jobs; reuse an active start/recovery job, or start once from the existing configuration/build only if the service is confirmed stopped and startup is allowed. Verify READY before continuing, then inspect actual state without replaying the failed action."}

@@ -1,7 +1,8 @@
 """Memory-only WDA MJPEG preview and a small, private cross-process activity bus.
 
-The widget supplies a short lease. No visible widget means no USB capture; opening
-the tool returns immediately. This module never calls the WDA command channel.
+The widget supplies a short lease. No visible widget means no device capture (USB
+or Wi-Fi); opening the tool returns immediately. This module never calls the WDA
+command channel.
 """
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ import tempfile
 import threading
 import time
 import uuid
+
+from wda_setup import DEFAULT_TRANSPORT, TRANSPORTS
 
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 FRAME_LEASE_SECONDS = 5
@@ -413,28 +416,33 @@ class ScreenHub:
             config = json.loads((self.state_dir / "config.json").read_text())
             udid = config.get("udid")
             port = config.get("mjpeg_device_port", 9100)
+            transport = config.get("transport", DEFAULT_TRANSPORT)
             if not isinstance(udid, str) or not re.fullmatch(r"[A-Za-z0-9-]{8,64}", udid):
                 return None
             if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
                 return None
+            if transport not in TRANSPORTS:
+                return None
             node = shutil.which("node")
             runtime = self.state_dir / "runtime/forward"
-            source = Path(__file__).resolve().parents[1] / "tooling/screen-stream.mjs"
-            if not node or not (runtime / "node_modules/appium-ios-device").is_dir() or not source.is_file():
+            tooling = Path(__file__).resolve().parents[1] / "tooling"
+            if not node or not (runtime / "node_modules/appium-ios-device").is_dir():
                 return None
-            target = runtime / "screen-stream.mjs"
-            source_bytes = source.read_bytes()
-            if not target.is_file() or target.read_bytes() != source_bytes:
-                fd, temporary = tempfile.mkstemp(prefix=".screen-stream-", dir=runtime)
-                try:
-                    os.fchmod(fd, 0o600)
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(source_bytes)
-                    os.replace(temporary, target)
-                finally:
-                    if os.path.exists(temporary):
-                        os.unlink(temporary)
-            return [node, str(target), udid, str(port)]
+            # The shared path picker lands first, so the stream never runs without it.
+            for name in ("device-path.mjs", "screen-stream.mjs"):
+                source_bytes = (tooling / name).read_bytes()
+                target = runtime / name
+                if not target.is_file() or target.read_bytes() != source_bytes:
+                    fd, temporary = tempfile.mkstemp(prefix="." + name + "-", dir=runtime)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, "wb") as stream:
+                            stream.write(source_bytes)
+                        os.replace(temporary, target)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.unlink(temporary)
+            return [node, str(runtime / "screen-stream.mjs"), udid, str(port), transport]
         except (OSError, ValueError, AttributeError):
             return None
 

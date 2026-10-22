@@ -15,7 +15,7 @@
 - 显式验收的 `postcondition_failed`：动作已接收但验收条件未满足，查看实际状态再决定剩余步骤，不因验收失败自动重放动作。
 - `action_executed=true, action_complete=false`、`action_uncertain`、`uncertain=true` 或动作后 timeout：至少部分动作可能已生效。`action_uncertain.transport_error` 区分下面三类传输问题，按 recovery 等待或检查连接，再观察真实字段 / 记录；不能切换代码入口后盲目再做输入、发送、提交、删除或整个批次。
 - `pua_timeout`：socket 等待或调用预算耗尽，不证明断连。按返回的 `retry_after_seconds` 在宿主侧等待（当前为 2 秒），再取一次 `pua_observe(mode="screenshot")`，不要立即重试整树或动作，也不用 `pua_wait`（它会新增 AX 查询）。截图仍超时最多再延迟尝试一次，之后调用 `pua_setup(action="status")` 诊断；重复超时本身不授权重启。若原调用是 READY，用相同参数延迟重试 READY，而不是换成观察、start 或 recover。
-- `pua_unreachable`：连接拒绝、连接重置、管道关闭或 EOF 等 HTTP 通道连接失败。调用 `pua_setup(action="status")`，复用当前 start / recover 工作；确认服务未运行且已配置、没有活动工作、用户允许启动时才 start 一次。连接失败本身不证明物理 USB 已拔出。
+- `pua_unreachable`：连接拒绝、连接重置、管道关闭或 EOF 等 HTTP 通道连接失败。调用 `pua_setup(action="status")`，复用当前 start / recover 工作；确认服务未运行且已配置、没有活动工作、用户允许启动时才 start 一次。连接失败本身不证明数据线已拔出或 Wi-Fi 已断开。
 - `pua_transport_error`：其他传输或协议异常，按返回细节检查 setup status / 日志，不当作超时或确定断连，也不自动重启或重放动作。
 - 查询失败不证明手机动作已执行，POST 查询接口不应按 mutation 处理；查询超时不自动立即重读，遵循上述有界延迟恢复。
 - `local.pid.0`、`pua_foreground_unavailable` 或 XCTest Code 41：通道故障，调用 READY 恢复；不要通过更改 selector 或重复手机按钮处理。锁屏、签名和信任问题按 setup skill；App 密码 / Face ID 按认证接管。

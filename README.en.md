@@ -120,7 +120,7 @@ If tools are missing, confirm the connector is enabled and start a new chat / Lo
 | An Apple account and development team available in Xcode | Sign the on-device WDA Runner |
 | A real iPhone connected over USB | Trust the Mac, enable Developer Mode when required, and keep it unlocked during installation / startup |
 | Python 3.9+ | Run the MCP server using Python's standard library |
-| Node.js 20.19+, 22.12+, or 24+; npm 10+ | USB forwarding and screen streaming; see the project engines and doctor checks |
+| Node.js 20.19+, 22.12+, or 24+; npm 10+ | USB / Wi-Fi forwarding and screen streaming; see the project engines and doctor checks |
 
 Xcode must support the phone's iOS version. No jailbreak or separate Appium Server is required. Setup uses a verified, pinned WDA 16.14.0 commit and manages downloads, dependencies, signing, and builds locally.
 
@@ -154,6 +154,22 @@ Reconnect or start a new chat, enable **iPhone Use**, and ask:
 
 Setup covers diagnostics, device discovery, signing configuration, download, background build, and startup. Existing configurations and builds are reused. Phone tasks start only after `pua_ready` returns `ready=true`.
 
+### Connect over Wi-Fi (experimental)
+
+First complete setup and READY once over the cable, and confirm in Xcode's **Window → Devices and Simulators** that **Connect via network** is enabled for the iPhone. When the phone is then unlocked and on the same local network as the Mac, Xcode can start WDA wirelessly. While WDA runs, Xcode keeps a CoreDevice tunnel to the phone, and forwarding and the screen stream travel over Wi-Fi through that tunnel. Finder's **Show this iPhone when on Wi-Fi** is not needed: that usbmux network path is plain TCP and often disappears once the phone locks.
+
+The `transport` option of `pua_setup(action="configure", ...)` selects the path:
+
+| Value | Behavior |
+| --- | --- |
+| `auto` (default) | USB whenever usbmux lists the cable, otherwise the CoreDevice tunnel. Each new connection chooses again, so unplugging switches to the tunnel and plugging back in returns to USB |
+| `usb` | Cable only |
+| `network` | CoreDevice tunnel only |
+
+Stop a running start job before changing `transport`; changing it does not require a rebuild. `forward_paths` in `pua_doctor` reports `usb` (usbmux sees the cable), `wifi` (Xcode reaches the phone over the local network), and `tunnel` (the tunnel is connected; it exists only while WDA runs). Measured on one local network: `/status` round trips take about 2 ms over USB and 25 ms through the tunnel; through the tunnel a 1 MB screenshot takes about 0.4 s and the preview runs at about 9.7 fps, close to USB.
+
+CoreDevice encrypts the tunnel and authenticates it with the Xcode pairing. `transport` only restricts the path iPhone Use itself takes, though: a running WDA listens on every network interface of the phone without authentication, so other devices on the same network may still reach its ports directly. On office or public networks, stop WDA when you are done.
+
 ## Features
 
 | Feature | Behavior |
@@ -185,7 +201,7 @@ Repeated preview opens in the same chat reuse the existing widget. Its toolbar o
 
 ## Technical details
 
-- **Local USB transport:** Python accesses WDA through a loopback-only forwarder; runtime and signing data stay on the Mac.
+- **Local USB / Wi-Fi transport:** Python accesses WDA through a loopback-only forwarder that reaches the phone through usbmux over the cable or through the encrypted CoreDevice tunnel over Wi-Fi; runtime and signing data stay on the Mac.
 - **Reuse:** persistent HTTP connections, WDA sessions, healthy services, and builds reduce repeated work.
 - **Compact observations and compound actions:** omit duplicate tree fields, skip XML for screenshot-only reads, and reduce turns with batch / scroll-search / list collection.
 - **Background setup:** downloads, builds, and startup return queryable job IDs; repeated setup reuses matching active jobs.
@@ -223,7 +239,7 @@ git pull --ff-only
 sh scripts/install.sh
 ```
 
-Reconnect the chat after updating. For connection failures, check USB, unlocking, Developer Mode, signing, and the specific setup error. Query an existing startup job before restarting again.
+Reconnect the chat after updating. For connection failures, check the USB or Wi-Fi path (`forward_paths` in `pua_doctor`), unlocking, Developer Mode, signing, and the specific setup error. Query an existing startup job before restarting again.
 
 ## Development and documentation
 

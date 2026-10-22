@@ -3,7 +3,7 @@
   "version": "0.1.14",
   "private": true,
   "type": "module",
-  "description": "Loopback-only USB forwarding for a pinned WebDriverAgent runtime",
+  "description": "Loopback-only USB / CoreDevice tunnel forwarding for a pinned WebDriverAgent runtime",
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=24.0.0",
     "npm": ">=10"

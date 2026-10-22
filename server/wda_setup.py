@@ -18,6 +18,7 @@ import re
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,17 @@ def state_directory(explicit=None):
         return previous
     return current
 ACTIVE_STATES = {"queued", "running"}
+# Paths for the device forward: usb is usbmux's cable record; network is the
+# CoreDevice tunnel Xcode keeps while the runner's session is active (Wi-Fi when
+# unplugged). auto uses the cable whenever usbmux lists it, the tunnel otherwise.
+TRANSPORTS = ("auto", "usb", "network")
+DEFAULT_TRANSPORT = "auto"
+USBMUXD_SOCKET = "/var/run/usbmuxd"
+TRANSPORT_HINTS = {
+    "usb": "usbmux does not list the iPhone on a USB cable (transport=usb). Reconnect the cable and unlock the iPhone, or configure transport=auto to allow the CoreDevice tunnel over Wi-Fi.",
+    "network": "CoreDevice has no tunnel to the iPhone (transport=network). The tunnel appears while the PUA runner's Xcode session is active; if start stalls, keep the iPhone unlocked on the Mac's network and paired for wireless development (Xcode Devices and Simulators > Connect via network, set up once over USB).",
+    "auto": "The iPhone has neither a USB cable listed by usbmux nor a CoreDevice tunnel (transport=auto). Connect the cable, or keep the iPhone unlocked on the Mac's network and paired for wireless development (Xcode Devices and Simulators > Connect via network); the tunnel appears while the PUA runner starts.",
+}
 RECOVERY_COOLDOWN_SECONDS = 120
 PID_PUBLICATION_GRACE_SECONDS = 5
 
@@ -99,6 +111,72 @@ def _fingerprint(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
 
+def _build_fingerprint(config):
+    """Transport only selects the forward path; changing it keeps the build valid."""
+    return _fingerprint({key: value for key, value in config.items() if key != "transport"})
+
+
+def _recv_exact(stream, size):
+    data = b""
+    while len(data) < size:
+        chunk = stream.recv(size - len(data))
+        if not chunk:
+            raise OSError("usbmuxd closed the connection.")
+        data += chunk
+    return data
+
+
+def usbmux_cabled(udids, socket_path=USBMUXD_SOCKET, timeout=2):
+    """Read-only usbmuxd ListDevices: whether a USB cable record reaches each UDID.
+
+    Returns {udid: bool}, or None when usbmuxd cannot be queried. usbmux Network
+    records are ignored; Wi-Fi goes through the CoreDevice tunnel instead. No
+    device connection is opened.
+    """
+    request = plistlib.dumps({"MessageType": "ListDevices", "ProgName": "iphone-use",
+                              "ClientVersionString": "iphone-use"})
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect(socket_path)
+            # Header: total length, protocol version 1, message type 8 (plist), tag.
+            client.sendall(struct.pack("<IIII", 16 + len(request), 1, 8, 1) + request)
+            length = struct.unpack("<IIII", _recv_exact(client, 16))[0]
+            if not 16 <= length <= 16 + 4 * 1024 * 1024:
+                return None
+            document = plistlib.loads(_recv_exact(client, length - 16))
+    except (OSError, ValueError, struct.error):
+        return None
+    cabled = {udid: False for udid in udids if isinstance(udid, str)}
+    records = document.get("DeviceList", []) if isinstance(document, dict) else []
+    for record in records if isinstance(records, list) else []:
+        properties = record.get("Properties", {}) if isinstance(record, dict) else {}
+        if properties.get("SerialNumber") in cabled and properties.get("ConnectionType") == "USB":
+            cabled[properties["SerialNumber"]] = True
+    return cabled
+
+
+def _forward_paths(device, cabled):
+    """usb: usbmux lists a cable. wifi: CoreDevice reaches the phone on the local
+    network. tunnel: the CoreDevice tunnel is up now (only while a session runs)."""
+    return {"usb": cabled.get(device.get("udid")) if cabled is not None else None,
+            "wifi": device.get("transport") == "localNetwork",
+            "tunnel": device.get("tunnel_state") == "connected"}
+
+
+def _transport_hint(transport, paths):
+    """A next step when the configured transport cannot reach the iPhone, else None.
+
+    usb is None when usbmuxd could not be queried; cable-dependent hints are then withheld.
+    """
+    network = paths["wifi"] or paths["tunnel"]
+    if transport == "network":
+        return None if network else TRANSPORT_HINTS["network"]
+    if paths["usb"] is None or paths["usb"] or (transport == "auto" and network):
+        return None
+    return TRANSPORT_HINTS.get(transport)
+
+
 def _node_supported(version):
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version.strip())
     if not match:
@@ -130,6 +208,10 @@ def _diagnose(text):
          "Reconnect USB, unlock the iPhone, accept Trust This Computer yourself and verify pairing in Xcode Window > Devices and Simulators."),
         (("address already in use", "eaddrinuse", "local forward port is occupied"),
          "The local forward port is in use. Reuse an already healthy WDA, stop only this plugin's owned job, or configure another local port; do not kill unrelated processes."),
+        # The device forward logs these when the configured transport has no path.
+        (("no usb record for the configured",), TRANSPORT_HINTS["usb"]),
+        (("no coredevice tunnel to the configured",), TRANSPORT_HINTS["network"]),
+        (("no usb record or coredevice tunnel",), TRANSPORT_HINTS["auto"]),
     ]
     return [hint for needles, hint in cases if any(needle in text for needle in needles)]
 
@@ -174,6 +256,8 @@ class SetupManager:
                 raise ValueError(f"{key} must be an integer between 1024 and 65535.")
         if config["local_port"] != self.port:
             raise ValueError(f"local_port must match the MCP base URL port ({self.port}); update the plugin URL and restart MCP to change ports.")
+        if config.get("transport", DEFAULT_TRANSPORT) not in TRANSPORTS:
+            raise ValueError("transport must be one of: " + ", ".join(TRANSPORTS) + ".")
         return config
 
     def _source(self, config):
@@ -212,6 +296,7 @@ class SetupManager:
                            "pairing_state": connection.get("pairingState", "unknown"),
                            "connection_state": connection.get("state", connection.get("tunnelState", "unknown")),
                            "transport": connection.get("transportType", "unknown"),
+                           "tunnel_state": connection.get("tunnelState", "unknown"),
                            "developer_mode": developer, "unlocked": "user_check_required"})
         return result
 
@@ -232,6 +317,9 @@ class SetupManager:
                                if not item.get("simulator") and item.get("platform") == "com.apple.platform.iphoneos"]
                 except (ValueError, TypeError, KeyError):
                     pass
+            cabled = usbmux_cabled([device.get("udid") for device in devices])
+            for device in devices:
+                device["forward_paths"] = _forward_paths(device, cabled)
             return {"ok": bool(document) or bool(devices), "devices": devices,
                     "selected_udid": self.config.get("udid"), "error": probe["stderr"] if not probe["ok"] else None,
                     "next_steps": [] if devices else ["Connect iPhone by USB, unlock it, accept Trust This Computer yourself and open Xcode Devices and Simulators."]}
@@ -282,11 +370,16 @@ class SetupManager:
         if not checks["full_xcode"]:
             next_steps.append("Install full Xcode, launch it to accept its license and install components, then select that Xcode with xcode-select.")
         if not checks["node"] or not checks["npm"]:
-            next_steps.append("Install Node.js 20.19+ / 22.12+ / 24+ with npm 10+ for the loopback USB forward.")
+            next_steps.append("Install Node.js 20.19+ / 22.12+ / 24+ with npm 10+ for the loopback device forward (USB or Wi-Fi).")
         if not checks["configured"]:
             next_steps.append("Discover the device, then configure its explicit UDID, your Apple Team ID and a unique reverse-DNS bundle ID.")
         if config and not chosen:
-            next_steps.append("Reconnect the selected iPhone by USB and confirm its UDID in Xcode Devices and Simulators.")
+            next_steps.append("Reconnect the selected iPhone by USB, or keep it unlocked on the Mac's Wi-Fi network if Xcode paired it for wireless use, and confirm its UDID in Xcode Devices and Simulators.")
+        transport = config.get("transport", DEFAULT_TRANSPORT)
+        paths = chosen.get("forward_paths") if chosen else None
+        hint = _transport_hint(transport, paths) if paths else None
+        if hint:
+            next_steps.append(hint)
         if not checks["paired"]:
             next_steps.append("Unlock the iPhone and accept Trust This Computer yourself; verify pairing in Xcode.")
         if not checks["developer_mode"]:
@@ -303,6 +396,8 @@ class SetupManager:
         if mirroring:
             next_steps.append("Quit iPhone Mirroring if the phone shows the Mac-in-use lock screen or WDA has an empty accessibility tree, then verify READY again.")
         return {"ok": all(checks.values()), "checks": checks, "devices": discovery["devices"],
+                "transport": transport, "forward_paths": paths,
+                "transport_note": "auto uses the USB cable whenever usbmux lists it and the CoreDevice tunnel otherwise; usb and network allow only that path. The tunnel is encrypted by CoreDevice and exists while the runner's Xcode session runs; the runner itself still listens on every phone interface.",
                 "iphone_mirroring_running": mirroring,
                 "selected_device": chosen, "xcode_version": xcode["stdout"].strip(),
                 "developer_dir": developer_dir["stdout"].strip(), "binaries": binaries,
@@ -395,7 +490,7 @@ class SetupManager:
 
     def _require_build(self, config):
         marker = _read_json(self.state_dir / "build.json", {})
-        if marker.get("config_fingerprint") != _fingerprint(config) or marker.get("commit") != WDA_COMMIT:
+        if marker.get("config_fingerprint") != _build_fingerprint(config) or marker.get("commit") != WDA_COMMIT:
             raise ValueError("Run build successfully for this configuration before start; start uses test-without-building.")
 
     @staticmethod
@@ -466,7 +561,7 @@ class SetupManager:
                 if sys.platform != "darwin" or not all(shutil.which(name) for name in ("xcodebuild", "node", "npm")):
                     raise ValueError("Recovery requires macOS, full Xcode and supported Node.js / npm.")
                 if not _node_supported(_run(["node", "--version"])["stdout"]):
-                    raise ValueError("USB forwarding requires Node.js 20.19+ / 22.12+ / 24+; update Node.js before recovery.")
+                    raise ValueError("Device forwarding requires Node.js 20.19+ / 22.12+ / 24+; update Node.js before recovery.")
                 target = targets[0]
                 snapshot = {key: target.get(key) for key in ("id", "pid", "owner_token", "worker_entrypoint")}
                 snapshot.update(config_fingerprint=_fingerprint(config), base_url=self.base_url)
@@ -674,12 +769,13 @@ class SetupManager:
                 if action == "configure":
                     if any(job.get("state") in ACTIVE_STATES and self._owned(job) for job in self._jobs()):
                         raise ValueError("Stop the owned job before changing its configuration.")
-                    allowed_args = {"udid", "team_id", "bundle_id", "source_dir", "local_port", "device_port"}
+                    allowed_args = {"udid", "team_id", "bundle_id", "source_dir", "local_port", "device_port", "transport"}
                     if set(args) - allowed_args:
                         raise ValueError("Unknown configure arguments: " + ", ".join(sorted(set(args) - allowed_args)))
                     config = {"udid": args.get("udid"), "team_id": args.get("team_id"), "bundle_id": args.get("bundle_id"),
                               "source_dir": str(Path(args.get("source_dir") or self.state_dir / "runtime/WebDriverAgent").expanduser().resolve()),
-                              "local_port": args.get("local_port", self.port), "device_port": args.get("device_port", 8100)}
+                              "local_port": args.get("local_port", self.port), "device_port": args.get("device_port", 8100),
+                              "transport": args.get("transport", DEFAULT_TRANSPORT)}
                     self._validate_config(config)
                     if args.get("source_dir"):
                         self._source(config)
@@ -702,9 +798,9 @@ class SetupManager:
                                 "note": "Reusing reachable WDA. This plugin does not own or stop that external service."}
                     self._require_build(config)
                     if not shutil.which("node") or not shutil.which("npm"):
-                        raise ValueError("Install supported Node.js and npm for the USB forward.")
+                        raise ValueError("Install supported Node.js and npm for the device forward.")
                     if not _node_supported(_run(["node", "--version"])["stdout"]):
-                        raise ValueError("USB forwarding requires Node.js 20.19+ / 22.12+ / 24+; update Node.js before start.")
+                        raise ValueError("Device forwarding requires Node.js 20.19+ / 22.12+ / 24+; update Node.js before start.")
                     with socket.socket() as probe:
                         # Node listeners use address reuse. A recently stopped
                         # owned forward can leave connections in TIME_WAIT;
@@ -809,7 +905,7 @@ def _worker(state_dir, job_id, owner_token, base_url):
                 with contextlib.suppress(FileNotFoundError):
                     (manager.state_dir / "build.json").unlink()
                 run(manager._build_command(config, "build-for-testing"), cwd=source)
-                _write_json(manager.state_dir / "build.json", {"config_fingerprint": _fingerprint(config), "commit": WDA_COMMIT, "built_at": _now()})
+                _write_json(manager.state_dir / "build.json", {"config_fingerprint": _build_fingerprint(config), "commit": WDA_COMMIT, "built_at": _now()})
             else:
                 if action == "recover":
                     # /status.ready cannot verify XCTest authorization. This
@@ -822,17 +918,18 @@ def _worker(state_dir, job_id, owner_token, base_url):
                     _write_json(path, job)
                 forward = manager.state_dir / "runtime/forward"
                 forward.mkdir(exist_ok=True, mode=0o700)
-                for name in ("package.json", "package-lock.json", "forward.mjs"):
+                for name in ("package.json", "package-lock.json", "device-path.mjs", "forward.mjs"):
                     shutil.copyfile(PLUGIN_ROOT / "tooling" / name, forward / name)
                     (forward / name).chmod(0o600)
                 lock_hash = hashlib.sha256((forward / "package-lock.json").read_bytes()).hexdigest()
                 if _read_json(forward / "installed.json", {}).get("lock_hash") != lock_hash or not (forward / "node_modules/appium-ios-device").is_dir():
                     run(["npm", "ci", "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund"], cwd=forward)
                     _write_json(forward / "installed.json", {"lock_hash": lock_hash})
-                forward_child = launch(["node", str(forward / "forward.mjs"), config["udid"], str(config["local_port"]), str(config["device_port"])])
+                forward_child = launch(["node", str(forward / "forward.mjs"), config["udid"], str(config["local_port"]),
+                                        str(config["device_port"]), config.get("transport", DEFAULT_TRANSPORT)])
                 time.sleep(0.15)
                 if forward_child.poll() is not None:
-                    raise RuntimeError("USB forward failed to start; inspect the log tail.")
+                    raise RuntimeError("Device forward failed to start; inspect the log tail.")
                 xcode = launch(manager._build_command(config, "test-without-building"), source)
                 next_status_probe = 0
                 # Keep both children owned and watch either side fail.
@@ -848,7 +945,7 @@ def _worker(state_dir, job_id, owner_token, base_url):
                     time.sleep(0.25)
                 if stopping:
                     raise InterruptedError("Stopped by owner request.")
-                raise RuntimeError("WDA runner or USB forward exited; inspect the log tail and start again.")
+                raise RuntimeError("WDA runner or device forward exited; inspect the log tail and start again.")
         else:
             raise ValueError("Unsupported worker action.")
         job.update(state="succeeded", completed_at=_now())
@@ -903,12 +1000,13 @@ def main():
     parser.add_argument("--source-dir")
     parser.add_argument("--local-port", type=int)
     parser.add_argument("--device-port", type=int)
+    parser.add_argument("--transport", choices=TRANSPORTS)
     parser.add_argument("--job-id")
     args = parser.parse_args()
     if args.worker:
         return _worker(*args.worker, args.base_url)
     manager = SetupManager(args.state_dir, args.base_url)
-    kwargs = {key: getattr(args, key) for key in ("udid", "team_id", "bundle_id", "source_dir", "local_port", "device_port", "job_id") if getattr(args, key) is not None}
+    kwargs = {key: getattr(args, key) for key in ("udid", "team_id", "bundle_id", "source_dir", "local_port", "device_port", "transport", "job_id") if getattr(args, key) is not None}
     result = manager.doctor() if args.action == "doctor" else manager.setup(args.action, **kwargs)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1

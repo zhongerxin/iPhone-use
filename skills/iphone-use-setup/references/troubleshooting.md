@@ -11,7 +11,9 @@
 | maximum number of apps for free development profiles | Personal Team 是否已有 3 个开发 App | 列明系统指出的限制，用户自己选择是否卸载不需要的开发 App，或使用其已有的其他有效团队；不要自动删 App，也不要强迫购买开发者计划。 |
 | profile / certificate expired、旧 Runner 不再启动 | 构建日志的签名有效性与 profile 到期 | 使用原有本机配置重新 build/start，重新验 READY；免费 profile 常需 7 天后续签，具体以当前 profile 为准。不要只重开端口。 |
 | developer not trusted / unable to verify | 手机开发者条目、网络与 Xcode 提示 | 用户在当前开发者条目完成信任或验证，按系统错误检查网络；不吊销其他项目的共享证书。 |
-| build succeeded，但 HTTP 不可达 | Runner 测试是否仍在运行、USB 转发进程及本机端口 | 用 status 分开确认运行与转发，再 start 恢复；不把 BUILD SUCCEEDED 当 READY。 |
+| build succeeded，但 HTTP 不可达 | Runner 测试是否仍在运行、设备转发进程（USB 或 Wi-Fi）及本机端口 | 用 status 分开确认运行与转发，再 start 恢复；不把 BUILD SUCCEEDED 当 READY。 |
+| 日志 `No USB record` / `No CoreDevice tunnel` / `No USB record or CoreDevice tunnel`，或 doctor `forward_paths` 缺少所需路径 | 配置的 `transport`、数据线、Xcode 无线开发配对（Connect via network）、手机是否解锁并与 Mac 同网 | 启动阶段隧道尚未建立属正常；持续出现时补上对应路径，或按用户意图改 transport（先 stop，再 configure、start），重新验 READY。 |
+| 日志 `CoreDevice tunnel connection ... failed: the port is not listening yet` | Runner 是否已在监听 | 启动阶段属正常重试；持续出现时查看 start 工作日志与手机解锁状态，再按 status 恢复。 |
 | 端口冲突 | 是否已有正确设备的转发或无关程序 | 正确转发可复用；否则配置空闲的本机端口。不要杀掉归属不明的进程。 |
 | HTTP status 可达，会话或 source 失败 | 服务对应的设备、PUA session、设备锁屏 / 测试进程 | 先读取错误与状态，必要时重建会话 / 重启 Runner；重新验有效视口与当前观察。 |
 | stale element reference 含 local.pid.0 / pua_foreground_unavailable | PUA / XCTest 是否能解析当前真实前台，不能只看 status.ready | 调用 pua_ready；只重读一次会话 / 界面，持续故障再按 recovery 跟踪已核验归属的后台服务恢复。旧观察和元素 ID 作废。 |
@@ -28,7 +30,7 @@ status 返回 `jobs` 数组，用 id 匹配请求的 job_id，不读取不存在
 
 READY 自带当前 observation，直接复用它准备下一步。常规 tap、Home、launch、输入和滚动默认乐观执行；普通 verified=false 不要求停下或另调观察。下一步需要未知页面时，在该次动作返回所需观察并顺带判断进度；仅最终关键结果显式 expect / verify 或终态回读。已知坐标 / region 无需为了 observation ID 另读图或树；若使用 ID，必须来自同一 Runtime 和相符的 App / 视口。
 
-PUA 路径不依赖 Mac 的 iPhone 镜像窗口、显示器原点或镜像锁屏互斥，但设备锁定、用户操作、USB 断开和 App 的认证策略仍会改变真机测试状态。只根据当前通道证据恢复，不套用“镜像必须锁定手机”的步骤。
+PUA 路径不依赖 Mac 的 iPhone 镜像窗口、显示器原点或镜像锁屏互斥，但设备锁定、用户操作、数据线或 Wi-Fi 断开和 App 的认证策略仍会改变真机测试状态。只根据当前通道证据恢复，不套用“镜像必须锁定手机”的步骤。
 
 签名资料：[Apple Personal Team](https://developer.apple.com/help/account/basics/about-your-developer-account)、[Appium provisioning](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/provisioning-profile/)、[Appium 自动签名](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/provisioning-profile/auto-config/)。核对日期：2026-10-06。
 

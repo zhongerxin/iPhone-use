@@ -99,6 +99,111 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((self.manager.state_dir / "config.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.manager.state_dir.stat().st_mode & 0o777, 0o700)
 
+    def test_transport_defaults_to_auto_and_accepts_only_known_paths(self):
+        self.assertEqual(self.configure()["config"]["transport"], "auto")
+        for transport in ("usb", "network", "auto"):
+            self.assertEqual(self.configure(transport=transport)["config"]["transport"], transport)
+        for transport in ("wifi", "USB", True, ["usb"]):
+            self.assertFalse(self.configure(transport=transport)["ok"], transport)
+        self.assertEqual(self.manager.config["transport"], "auto")
+        # A configuration written before transport existed keeps the default.
+        legacy = {key: value for key, value in self.manager.config.items() if key != "transport"}
+        self.assertIs(self.manager._validate_config(legacy), legacy)
+
+    def test_transport_change_keeps_a_build_made_before_transport_existed(self):
+        self.assertTrue(self.configure()["ok"])
+        legacy = {key: value for key, value in self.manager.config.items() if key != "transport"}
+        wda_setup._write_json(self.manager.state_dir / "build.json", {
+            "config_fingerprint": wda_setup._fingerprint(legacy), "commit": wda_setup.WDA_COMMIT,
+        })
+        for transport in ("auto", "usb", "network"):
+            self.assertTrue(self.configure(transport=transport)["ok"])
+            self.manager._require_build(self.manager.config)
+        self.assertTrue(self.configure(device_port=8101)["ok"])
+        with self.assertRaisesRegex(ValueError, "build successfully"):
+            self.manager._require_build(self.manager.config)
+
+    def test_transport_failures_point_to_the_matching_path(self):
+        # The exact lines tooling/device-path.mjs logs through the forward.
+        logs = {"usb": "No USB record for the configured iPhone (transport=usb).",
+                "network": "No CoreDevice tunnel to the configured iPhone (transport=network): tunnelState=disconnected.",
+                "auto": "No USB record or CoreDevice tunnel for the configured iPhone (transport=auto): CoreDevice does not list it."}
+        for transport, log in logs.items():
+            self.assertEqual(wda_setup._diagnose("Device connect failed: " + log), [wda_setup.TRANSPORT_HINTS[transport]], transport)
+        for log in ("USB connection to device port 8100 failed: Connection was refused to port 8100",
+                    "CoreDevice tunnel connection to device port 8100 failed: the port is not listening yet"):
+            self.assertEqual(wda_setup._diagnose("Device connect failed: " + log), [], log)
+
+    def test_transport_hint_needs_a_path_the_transport_allows(self):
+        def paths(usb, wifi=False, tunnel=False):
+            return {"usb": usb, "wifi": wifi, "tunnel": tunnel}
+        hint = wda_setup._transport_hint
+        self.assertIsNone(hint("usb", paths(True)))
+        self.assertEqual(hint("usb", paths(False, wifi=True, tunnel=True)), wda_setup.TRANSPORT_HINTS["usb"])
+        self.assertIsNone(hint("network", paths(False, wifi=True)))
+        self.assertIsNone(hint("network", paths(True, tunnel=True)))
+        self.assertEqual(hint("network", paths(True)), wda_setup.TRANSPORT_HINTS["network"])
+        self.assertIsNone(hint("auto", paths(True)))
+        self.assertIsNone(hint("auto", paths(False, wifi=True)))
+        self.assertEqual(hint("auto", paths(False)), wda_setup.TRANSPORT_HINTS["auto"])
+        # usbmuxd could not be queried: no cable-dependent hint, network is still known.
+        self.assertIsNone(hint("usb", paths(None)))
+        self.assertIsNone(hint("auto", paths(None)))
+        self.assertEqual(hint("network", paths(None)), wda_setup.TRANSPORT_HINTS["network"])
+
+    def test_discovered_devices_report_cable_wifi_and_tunnel_paths(self):
+        document = {"result": {"devices": [
+            {"identifier": "CORE-1", "hardwareProperties": {"reality": "physical", "deviceType": "iPhone", "udid": "PHONE-0001"},
+             "connectionProperties": {"transportType": "localNetwork", "tunnelState": "connected", "pairingState": "paired"}},
+            {"identifier": "CORE-2", "hardwareProperties": {"reality": "physical", "deviceType": "iPhone", "udid": "PHONE-0002"},
+             "connectionProperties": {"transportType": "wired", "tunnelState": "disconnected", "pairingState": "paired"}}]}}
+        devices = wda_setup.SetupManager.parse_devices(document)
+        self.assertEqual([device["tunnel_state"] for device in devices], ["connected", "disconnected"])
+        cabled = {"PHONE-0001": False, "PHONE-0002": True}
+        self.assertEqual(wda_setup._forward_paths(devices[0], cabled), {"usb": False, "wifi": True, "tunnel": True})
+        self.assertEqual(wda_setup._forward_paths(devices[1], cabled), {"usb": True, "wifi": False, "tunnel": False})
+        self.assertEqual(wda_setup._forward_paths(devices[1], None), {"usb": None, "wifi": False, "tunnel": False})
+
+    def fake_usbmuxd(self, reply):
+        """Serve one usbmuxd exchange on a private Unix socket; returns its path and the request."""
+        path = Path(tempfile.mkdtemp(prefix="mux", dir="/tmp")) / "usbmuxd"
+        self.addCleanup(lambda: (path.unlink(missing_ok=True), path.parent.rmdir()))
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        listener.listen(1)
+        seen = {}
+
+        def serve():
+            with listener, listener.accept()[0] as client:
+                header = wda_setup._recv_exact(client, 16)
+                length = wda_setup.struct.unpack("<IIII", header)[0]
+                seen["request"] = wda_setup.plistlib.loads(wda_setup._recv_exact(client, length - 16))
+                client.sendall(reply)
+
+        thread = wda_setup.threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 2)
+        return path, seen
+
+    def test_usbmux_cabled_reads_only_cable_records_without_opening_device_ports(self):
+        devices = {"DeviceList": [
+            {"DeviceID": 1, "Properties": {"SerialNumber": "PHONE-0001", "ConnectionType": "USB"}},
+            {"DeviceID": 2, "Properties": {"SerialNumber": "PHONE-0001", "ConnectionType": "Network"}},
+            {"DeviceID": 3, "Properties": {"SerialNumber": "OTHER-0002", "ConnectionType": "USB"}},
+            {"DeviceID": 4, "Properties": {"SerialNumber": "PHONE-0003", "ConnectionType": "Network"}},
+            "not a record"]}
+        body = wda_setup.plistlib.dumps(devices)
+        path, seen = self.fake_usbmuxd(wda_setup.struct.pack("<IIII", 16 + len(body), 1, 8, 1) + body)
+        cabled = wda_setup.usbmux_cabled(["PHONE-0001", "PHONE-0003", "MISSING-0004", None], socket_path=str(path))
+        # A usbmux Network record is not a path: Wi-Fi goes through the CoreDevice tunnel.
+        self.assertEqual(cabled, {"PHONE-0001": True, "PHONE-0003": False, "MISSING-0004": False})
+        self.assertEqual(seen["request"]["MessageType"], "ListDevices")
+
+    def test_usbmux_cabled_is_unknown_when_usbmuxd_is_unavailable_or_malformed(self):
+        self.assertIsNone(wda_setup.usbmux_cabled(["PHONE-0001"], socket_path="/tmp/no-such-usbmuxd-socket"))
+        path, _ = self.fake_usbmuxd(wda_setup.struct.pack("<IIII", 16 + 3, 1, 8, 1) + b"bad")
+        self.assertIsNone(wda_setup.usbmux_cabled(["PHONE-0001"], socket_path=str(path)))
+
     def test_runtime_rejects_repository_and_non_loopback_url(self):
         with self.assertRaises(ValueError):
             wda_setup.SetupManager(wda_setup.PLUGIN_ROOT / "private-runtime")
@@ -219,7 +324,7 @@ class SetupTests(unittest.TestCase):
         result = self.configure(local_port=port)
         self.assertTrue(result["ok"], result)
         wda_setup._write_json(self.manager.state_dir / "build.json", {
-            "config_fingerprint": wda_setup._fingerprint(self.manager.config), "commit": wda_setup.WDA_COMMIT,
+            "config_fingerprint": wda_setup._build_fingerprint(self.manager.config), "commit": wda_setup.WDA_COMMIT,
         })
 
     def start_without_device(self):
@@ -352,7 +457,7 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(self.configure(local_port=self.manager.port)["ok"])
         config = self.manager.config
         wda_setup._write_json(self.manager.state_dir / "build.json", {
-            "config_fingerprint": wda_setup._fingerprint(config), "commit": wda_setup.WDA_COMMIT,
+            "config_fingerprint": wda_setup._build_fingerprint(config), "commit": wda_setup.WDA_COMMIT,
         })
         job = self.job()
         job.update(config=config, worker_entrypoint=str(Path(wda_setup.__file__).resolve()), base_url=self.manager.base_url)
@@ -681,6 +786,8 @@ class SetupTests(unittest.TestCase):
         stop.assert_called_once()
         healthy.assert_called_once()
         self.assertEqual(launch.call_args_list[0].args[0][0], "node")
+        self.assertEqual(launch.call_args_list[0].args[0][-1], "auto")
+        self.assertEqual((forward / "device-path.mjs").read_bytes(), (wda_setup.PLUGIN_ROOT / "tooling/device-path.mjs").read_bytes())
         self.assertEqual(launch.call_args_list[1].args[0][-1], "test-without-building")
         stored = wda_setup._read_json(self.manager._job_path(job["id"]))
         self.assertEqual(stored["recovery_of"], original["id"])

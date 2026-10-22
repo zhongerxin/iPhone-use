@@ -111,7 +111,7 @@ https://github.com/zhongerxin/iPhone-use
 | 可在 Xcode 中使用的 Apple 账号和开发团队 | 签名手机端 WDA Runner |
 | USB 连接的真实 iPhone | 信任此 Mac，开启设备要求的开发者模式，安装与启动期间保持解锁 |
 | Python 3.9+ | 运行 MCP 服务；Python 端使用标准库 |
-| Node.js 20.19+、22.12+ 或 24+，npm 10+ | USB 转发与屏幕流；支持范围以项目 engines 和 doctor 检查为准 |
+| Node.js 20.19+、22.12+ 或 24+，npm 10+ | USB / Wi-Fi 转发与屏幕流；支持范围以项目 engines 和 doctor 检查为准 |
 
 Xcode 需要支持手机当前的 iOS 版本。无需越狱，也无需单独启动 Appium Server。WDA 固定使用已验证的 16.14.0 提交，下载、依赖安装、签名和构建由 setup 流程管理。
 
@@ -149,6 +149,22 @@ sh scripts/install.sh
 
 技能引导 Codex 完成诊断、设备发现、签名配置、获取 WDA、后台构建与启动。已配置过的设备会复用配置和构建，正常任务不需要每次重装。`pua_ready` 返回 `ready=true` 后才开始手机任务。
 
+### 通过 Wi-Fi 连接（实验）
+
+先按上面用数据线完成一次配置和 READY，并在 Xcode 的 **Window → Devices and Simulators** 中确认这台 iPhone 勾选了 **Connect via network**。之后手机解锁、和 Mac 在同一局域网时，Xcode 可以无线启动 WDA。WDA 运行期间，Xcode 与手机之间保持一条 CoreDevice 隧道，转发和屏幕流经这条隧道走 Wi-Fi。不需要 Finder 的「通过 Wi-Fi 显示这台 iPhone」：那条 usbmux 网络路径是明文的，而且手机锁屏后常常消失。
+
+`pua_setup(action="configure", ...)` 的 `transport` 决定走哪条路径：
+
+| 值 | 行为 |
+| --- | --- |
+| `auto`（默认） | usbmux 列出数据线时走 USB，否则走 CoreDevice 隧道。每个新连接重新选择，拔线后自动切到隧道，插回后回到 USB |
+| `usb` | 只走数据线 |
+| `network` | 只走 CoreDevice 隧道 |
+
+修改 `transport` 前先停止正在运行的 start 工作，改完不需要重新 build。`pua_doctor` 的 `forward_paths` 显示 `usb`（usbmux 看到数据线）、`wifi`（Xcode 能经局域网找到手机）和 `tunnel`（隧道已连接，只在 WDA 运行期间存在）。同一局域网实测：`/status` 往返 USB 约 2 ms、隧道约 25 ms；隧道下 1 MB 截图约 0.4 秒，预览约 9.7 fps，与 USB 接近。
+
+隧道由 CoreDevice 加密，并用 Xcode 的配对认证。不过 `transport` 只限定 iPhone Use 自己走的路径：WDA 运行时本身会在手机的所有网卡上监听、没有认证，同一网络里的其他设备仍可能直接访问它的端口。在公司或公共网络中，用完请停止 WDA。
+
 ## 可以做什么
 
 | 功能 | 示例 |
@@ -179,7 +195,7 @@ sh scripts/install.sh
 
 ## 技术亮点
 
-- **本地 USB 通道。** Python MCP 服务通过本机 loopback 转发访问 WDA，运行数据和签名构建保留在本机。
+- **本地 USB / Wi-Fi 通道。** Python MCP 服务通过本机 loopback 转发访问 WDA，转发经 usbmux 走数据线，或经 CoreDevice 加密隧道走 Wi-Fi；运行数据和签名构建保留在本机。
 - **减少重复工作。** 复用 HTTP 连接、WDA session、健康服务与已有构建；首次任务确认 READY，后续沿健康通道继续。
 - **紧凑观察与组合动作。** 控件树省略重复字段；仅需截图时不生成 XML；batch、滚动查找和列表采集减少工具回合。
 - **安装任务异步执行。** 下载、构建与启动返回可查询的工作 ID，重复 setup 优先复用正在进行的工作。
@@ -219,7 +235,7 @@ git pull --ff-only
 sh scripts/install.sh
 ```
 
-重新连接聊天以加载更新后的工具、技能和屏幕资源。若手机连接失败，先检查 USB、设备解锁、开发者模式、Xcode 签名与 setup 返回的具体错误；已有启动工作应继续查询，避免反复重启。
+重新连接聊天以加载更新后的工具、技能和屏幕资源。若手机连接失败，先检查 USB 或 Wi-Fi 路径（`pua_doctor` 的 `forward_paths`）、设备解锁、开发者模式、Xcode 签名与 setup 返回的具体错误；已有启动工作应继续查询，避免反复重启。
 
 ## 开发与文档
 

@@ -311,11 +311,18 @@ class ScreenHubTests(unittest.TestCase):
             dependency = self.directory / "runtime/forward/node_modules/appium-ios-device"
             dependency.mkdir(parents=True)
             command = self.hub._command()
-            self.assertEqual(command[-2:], ["TEST-DEVICE-1234", "9100"])
+            self.assertEqual(command[-3:], ["TEST-DEVICE-1234", "9100", "auto"])
             self.assertEqual(Path(command[1]).read_bytes(), (ROOT / "tooling/screen-stream.mjs").read_bytes())
             self.assertNotIn("secret", Path(command[1]).read_text())
             self.assertEqual(os.stat(command[1]).st_mode & 0o777, 0o600)
+            picker = Path(command[1]).with_name("device-path.mjs")
+            self.assertEqual(picker.read_bytes(), (ROOT / "tooling/device-path.mjs").read_bytes())
+            self.assertEqual(os.stat(picker).st_mode & 0o777, 0o600)
+            (self.directory / "config.json").write_text(json.dumps({"udid": "TEST-DEVICE-1234", "transport": "network"}))
+            self.assertEqual(self.hub._command()[-1], "network")
         (self.directory / "config.json").write_text('{"udid":"TEST-DEVICE-1234", "mjpeg_device_port":"http://remote"}')
+        self.assertIsNone(self.hub._command())
+        (self.directory / "config.json").write_text('{"udid":"TEST-DEVICE-1234", "transport":"wifi"}')
         self.assertIsNone(self.hub._command())
 
 
@@ -351,14 +358,18 @@ class NodeStreamTests(unittest.TestCase):
                 runtime = Path(temporary)
                 script = runtime / "screen-stream.mjs"
                 script.write_bytes((ROOT / "tooling/screen-stream.mjs").read_bytes())
+                (runtime / "device-path.mjs").write_bytes((ROOT / "tooling/device-path.mjs").read_bytes())
                 stub = runtime / "node_modules/appium-ios-device"
-                stub.mkdir(parents=True)
-                (stub / "package.json").write_text('{"type":"module","main":"index.js"}')
+                (stub / "build/lib/usbmux").mkdir(parents=True)
+                (stub / "package.json").write_text('{"type":"module"}')
                 # appium-ios-device returns the socket paused after unpiping its
                 # usbmux plist reader. A fresh, flowing TCP fixture hides this.
-                (stub / "index.js").write_text("import net from 'node:net'; export default {utilities:{connectPort: async () => "
-                                               f"net.connect({server.server_port}, '127.0.0.1').pause()" + "}};")
-                result = subprocess.run([shutil.which("node"), str(script), "TEST-DEVICE-1234", "9100"],
+                (stub / "build/lib/usbmux/index.js").write_text(
+                    "import net from 'node:net'; export async function getDefaultSocket() { return null; }\n"
+                    "export class Usbmux { async listDevices() { return [{DeviceID: 1, Properties: "
+                    "{SerialNumber: 'TEST-DEVICE-1234', ConnectionType: 'USB', DeviceID: 1}}]; }\n"
+                    f"  async connect() {{ return net.connect({server.server_port}, '127.0.0.1').pause(); }} close() {{}} }}\n")
+                result = subprocess.run([shutil.which("node"), str(script), "TEST-DEVICE-1234", "9100", "auto"],
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
                 self.assertEqual(result.stdout, body)
                 self.assertEqual(result.stderr, b"")
