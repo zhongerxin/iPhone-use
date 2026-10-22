@@ -32,6 +32,9 @@ WDA_COMMIT = "d17782422d55ff1e5e0ceb74eb1fd509cc0c35b6"
 WDA_VERSION = "16.14.0"
 WDA_REPOSITORY = "https://github.com/appium/WebDriverAgent.git"
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+WDA_NETWORK_POLICY = "iphone-use-loopback-v1"
+WDA_PATCH_SHA256 = "73eec0cede89e3846002be9cfc6e42af4d2ecc3a04308a3b930786d555fcd390"
+WDA_PATCH = Path(__file__).resolve().parent / "patches/wda-16.14.0-loopback.patch"
 DEFAULT_STATE = Path.home() / ".local/share/iphone-use"
 
 
@@ -97,6 +100,25 @@ def _run(argv, timeout=12, cwd=None):
 
 def _fingerprint(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+
+
+def network_hardened(value, device_port=8100, mjpeg_port=9100):
+    """Validate the current WDA status without making another HTTP request."""
+    if not isinstance(value, dict):
+        return False
+    evidence = value.get("iphoneUseNetwork", {})
+    listeners = evidence.get("listeners", []) if isinstance(evidence, dict) else []
+    required_ports = {device_port, mjpeg_port}
+    return (len(required_ports) == 2 and isinstance(evidence, dict) and evidence.get("policy") == WDA_NETWORK_POLICY
+            and isinstance(listeners, list) and len(listeners) == len(required_ports)
+            and all(isinstance(item, dict) and item.get("policy") == WDA_NETWORK_POLICY
+                    and item.get("listenerReady") is True and item.get("bindAddress") == "127.0.0.1"
+                    and item.get("ipVersion") == 4 and isinstance(item.get("port"), int)
+                    and not isinstance(item.get("port"), bool)
+                    and ("observedLocalAddress" not in item and "observedLocalPort" not in item
+                         or item.get("observedLocalAddress") == "127.0.0.1"
+                         and item.get("observedLocalPort") == item["port"]) for item in listeners)
+            and {item.get("port") for item in listeners} == required_ports)
 
 
 def _node_supported(version):
@@ -188,6 +210,48 @@ class SetupManager:
             raise ValueError("Pinned WDA source has tracked changes. Use fetch for a clean isolated checkout; existing work is preserved.")
         return source
 
+    def _verify_hardened_source(self, source):
+        """Only the exact reviewed patch on the exact upstream commit is valid."""
+        patch_bytes = WDA_PATCH.read_bytes()
+        if hashlib.sha256(patch_bytes).hexdigest() != WDA_PATCH_SHA256:
+            raise ValueError("The bundled WDA loopback patch does not match its pinned SHA-256.")
+        revision = _run(["git", "-C", str(source), "rev-parse", "HEAD"])
+        diff = _run(["git", "-C", str(source), "diff", "--binary", "--full-index", "--no-ext-diff",
+                     "--no-textconv", "--no-renames", "--no-color", "HEAD", "--"])
+        untracked = _run(["git", "-C", str(source), "ls-files", "--others", "--exclude-standard"])
+        if (not revision["ok"] or revision["stdout"].strip() != WDA_COMMIT
+                or not diff["ok"] or diff["stdout"].encode() != patch_bytes
+                or not untracked["ok"] or untracked["stdout"].strip()):
+            raise ValueError("The isolated WDA loopback checkout differs from the pinned commit and exact reviewed patch. It was preserved; do not build or start it.")
+        return source
+
+    def _hardened_source(self, config):
+        """Keep the user's original checkout pristine; patch an owned isolated copy."""
+        if hashlib.sha256(WDA_PATCH.read_bytes()).hexdigest() != WDA_PATCH_SHA256:
+            raise ValueError("The bundled WDA loopback patch does not match its pinned SHA-256.")
+        original = self._source(config)
+        target = self.state_dir / "runtime" / ("WebDriverAgent-loopback-" + WDA_PATCH_SHA256[:12])
+        if target.exists():
+            return self._verify_hardened_source(target)
+        temporary = Path(tempfile.mkdtemp(prefix=".wda-loopback-", dir=target.parent))
+        try:
+            for argv in (["git", "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(original), str(temporary)],
+                         ["git", "-C", str(temporary), "checkout", "--quiet", "--detach", WDA_COMMIT],
+                         ["git", "-C", str(temporary), "apply", "--check", str(WDA_PATCH)],
+                         ["git", "-C", str(temporary), "apply", str(WDA_PATCH)]):
+                result = _run(argv, timeout=60)
+                if not result["ok"]:
+                    raise ValueError("Cannot prepare the pinned WDA loopback checkout: " + result["stderr"])
+            self._verify_hardened_source(temporary)
+            temporary.rename(target)
+            return target
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+
+    def _network_hardened(self, value):
+        return network_hardened(value, self.config.get("device_port", 8100))
+
     @staticmethod
     def parse_devices(document):
         """Support Xcode's legacy and current CoreDevice JSON formats."""
@@ -247,6 +311,7 @@ class SetupManager:
                 document = json.loads(response.read(1024 * 1024))
             value = document.get("value", {})
             return {"reachable": True, "ready": value.get("ready") is True, "wda": value,
+                    "network_hardened": self._network_hardened(value),
                     "next_step": "Run MCP session + source smoke check before declaring the phone usable."}
         except (OSError, ValueError, urllib.error.URLError) as error:
             return {"reachable": False, "ready": False, "error": _redact(error)}
@@ -395,7 +460,8 @@ class SetupManager:
 
     def _require_build(self, config):
         marker = _read_json(self.state_dir / "build.json", {})
-        if marker.get("config_fingerprint") != _fingerprint(config) or marker.get("commit") != WDA_COMMIT:
+        if (marker.get("config_fingerprint") != _fingerprint(config) or marker.get("commit") != WDA_COMMIT
+                or marker.get("network_patch_sha256") != WDA_PATCH_SHA256):
             raise ValueError("Run build successfully for this configuration before start; start uses test-without-building.")
 
     @staticmethod
@@ -573,6 +639,10 @@ class SetupManager:
         log_path = self.state_dir / "logs" / (job_id + ".log")
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         env = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "DEVELOPER_DIR", "USER", "LOGNAME"}}
+        # Never inherit an unsafe caller-provided listener address. The patched
+        # transport enforces the same address even if Xcode drops this variable.
+        env["USE_IP"] = "127.0.0.1"
+        env["TEST_RUNNER_USE_IP"] = "127.0.0.1"
         try:
             with os.fdopen(fd, "wb") as log:
                 process = subprocess.Popen([sys.executable, job["worker_entrypoint"], "--worker", str(self.state_dir), job_id, job["owner_token"], "--base-url", self.base_url],
@@ -590,7 +660,8 @@ class SetupManager:
                 "-scheme", "WebDriverAgentRunner", "-configuration", "Debug", "-destination", "id=" + config["udid"],
                 "-derivedDataPath", str(self.state_dir / "derived_data"), "-allowProvisioningUpdates",
                 "DEVELOPMENT_TEAM=" + config["team_id"], "CODE_SIGN_STYLE=Automatic", "CODE_SIGN_IDENTITY=Apple Development",
-                "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"]), action]
+                "PRODUCT_BUNDLE_IDENTIFIER=" + config["bundle_id"], "USE_PORT=" + str(config["device_port"]),
+                "USE_IP=127.0.0.1", action]
 
     def setup(self, action, **args):
         wait_seconds = args.pop("wait_seconds", 20 if action == "start" else 0)
@@ -698,6 +769,8 @@ class SetupManager:
                 if action == "start":
                     healthy = self._probe_status()
                     if healthy["ready"]:
+                        if not healthy.get("network_hardened"):
+                            raise ValueError("Reachable WDA has no verified loopback policy for both HTTP and MJPEG. Preserve external services; stop an owned old start job, rebuild with this plugin, then start again.")
                         return {"ok": True, "already_ready": True, "service": healthy,
                                 "note": "Reusing reachable WDA. This plugin does not own or stop that external service."}
                     self._require_build(config)
@@ -803,14 +876,17 @@ def _worker(state_dir, job_id, owner_token, base_url):
             job["source_dir"] = str(source)
         elif action in {"build", "start", "recover"}:
             manager._validate_config(config)
-            source = manager._source(config)
+            source = manager._hardened_source(config)
+            build_config = dict(config, source_dir=str(source))
             if action == "build":
                 # A failed rebuild must not leave an old success marker usable.
                 with contextlib.suppress(FileNotFoundError):
                     (manager.state_dir / "build.json").unlink()
-                run(manager._build_command(config, "build-for-testing"), cwd=source)
-                _write_json(manager.state_dir / "build.json", {"config_fingerprint": _fingerprint(config), "commit": WDA_COMMIT, "built_at": _now()})
+                run(manager._build_command(build_config, "build-for-testing"), cwd=source)
+                _write_json(manager.state_dir / "build.json", {"config_fingerprint": _fingerprint(config), "commit": WDA_COMMIT,
+                            "network_patch_sha256": WDA_PATCH_SHA256, "built_at": _now()})
             else:
+                manager._require_build(config)
                 if action == "recover":
                     # /status.ready cannot verify XCTest authorization. This
                     # path deliberately never uses start's healthy shortcut.
@@ -833,7 +909,7 @@ def _worker(state_dir, job_id, owner_token, base_url):
                 time.sleep(0.15)
                 if forward_child.poll() is not None:
                     raise RuntimeError("USB forward failed to start; inspect the log tail.")
-                xcode = launch(manager._build_command(config, "test-without-building"), source)
+                xcode = launch(manager._build_command(build_config, "test-without-building"), source)
                 next_status_probe = 0
                 # Keep both children owned and watch either side fail.
                 while not stopping and all(child.poll() is None for child in (forward_child, xcode)):

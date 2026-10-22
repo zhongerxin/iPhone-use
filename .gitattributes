@@ -1,2 +1,5 @@
 # Blank context markers are required by the unified patch format.
 experiments/tree_element_handles/wda.patch -whitespace
+
+# Preserve the required blank context markers in the pinned unified patch.
+server/patches/wda-16.14.0-loopback.patch whitespace=-blank-at-eol

@@ -19,7 +19,7 @@ import threading
 import time
 from wda_client import WDAClient, WDAError
 from wda_controller import CALL_BUDGET, DEFAULT_MAX_NODES, PhoneController, TYPING_FREQUENCY
-from wda_setup import SetupManager, state_directory
+from wda_setup import SetupManager, state_directory, network_hardened
 from wda_apps import AppCatalog
 from wda_screen import ScreenHub
 import wda_image
@@ -484,11 +484,15 @@ class Runtime:
         except Exception:lock_pause=None
         status=self.client.request("GET","/status").get("value") or {}
         if status.get("ready") is not True:raise WDAError("not_ready","PUA is not accepting commands. Run pua_doctor and inspect setup status.")
+        config=getattr(self.setup_manager,"config",{})
+        config=config if isinstance(config,dict) else {}
+        if not network_hardened(status,config.get("device_port",8100)):
+            raise WDAError("network_policy_required","Both phone listeners must use the verified loopback policy. Stop the owned older service, build with this plugin, and start again.",details={"ready":False,"action_executed":False})
         if self.client.request("GET","/wda/locked").get("value") is not False:raise WDAError("phone_locked","Unlock the iPhone yourself, keep it awake, and verify READY again.")
         sid=self.client.ensure_session()
         observation=self.phone.observe("both" if screenshot else "tree")
         if observation.get("total_nodes",0)==0 and self.setup_manager.mirroring_running():raise WDAError("mirroring_conflict","iPhone Mirroring is running and PUA exposes an empty phone tree. Quit Mirroring, unlock if needed, then verify READY again.")
-        result={"ready":True,"state":"ready","proof":{"status_ready":True,"phone_unlocked":True,"session_usable":bool(sid),"foreground_resolved":True,"source_readable":True,"viewport_readable":True,"screenshot_readable":screenshot},"observation":observation}
+        result={"ready":True,"state":"ready","proof":{"network_loopback":True,"status_ready":True,"phone_unlocked":True,"session_usable":bool(sid),"foreground_resolved":True,"source_readable":True,"viewport_readable":True,"screenshot_readable":screenshot},"observation":observation}
         try:
             self.screen.resume_after_unlock(lock_pause)
             result["preview"]=self.screen.pause_status()

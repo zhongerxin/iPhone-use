@@ -1,0 +1,189 @@
+diff --git a/WebDriverAgentLib/Commands/FBSessionCommands.m b/WebDriverAgentLib/Commands/FBSessionCommands.m
+index d5f516aead318b96d40609b03b27c7c206df3548..bb2b235e32ca7c176d20d36943cb11fb416a0880 100644
+--- a/WebDriverAgentLib/Commands/FBSessionCommands.m
++++ b/WebDriverAgentLib/Commands/FBSessionCommands.m
+@@ -7,6 +7,7 @@
+  */
+ 
+ #import "FBSessionCommands.h"
++#import "FBTCPSocket.h"
+ 
+ #if TARGET_OS_WATCH
+ @import WatchKit;
+@@ -205,6 +206,7 @@ + (NSArray *)routes
+   return FBResponseWithObject(
+     @{
+       @"ready" : @YES,
++      @"iphoneUseNetwork" : @{ @"policy": @"iphone-use-loopback-v1", @"listeners": [FBTCPSocket listenerBindings] },
+       @"message" : @"WebDriverAgent is ready to accept commands",
+       @"state" : @"success",
+       @"os" :
+diff --git a/WebDriverAgentLib/Routing/FBTCPSocket.h b/WebDriverAgentLib/Routing/FBTCPSocket.h
+index 663b98940ddc6d3fb5912b1057be2af4361839e3..783c416857f8d4065fe32b3efca587e065ce6afe 100644
+--- a/WebDriverAgentLib/Routing/FBTCPSocket.h
++++ b/WebDriverAgentLib/Routing/FBTCPSocket.h
+@@ -65,8 +65,8 @@ NS_ASSUME_NONNULL_BEGIN
+ @property (nonatomic, readonly) uint16_t port;
+ 
+ /**
+- The local IP address to bind the listener to, or nil to listen on all interfaces. Must be set
+- before -startWithError: is called.
++ The local IP address. iPhone Use permits only 127.0.0.1 (also the nil default).
++ Non-loopback and IPv6 listeners are rejected before startup.
+  */
+ @property (nonatomic, copy, nullable) NSString *interface;
+ 
+@@ -91,6 +91,9 @@ NS_ASSUME_NONNULL_BEGIN
+  */
+ - (void)stop;
+ 
++/** Started listener policy and the effective local endpoint observed on accepted connections. */
+++ (NSArray<NSDictionary *> *)listenerBindings;
++
+ /**
+  Writes data to the given connected client
+ 
+diff --git a/WebDriverAgentLib/Routing/FBTCPSocket.m b/WebDriverAgentLib/Routing/FBTCPSocket.m
+index b4541f1f14f94c65f243bd495535ccbc662466f1..b51deb9bc7323f3eb4f3984ebfb395167c3ce49c 100644
+--- a/WebDriverAgentLib/Routing/FBTCPSocket.m
++++ b/WebDriverAgentLib/Routing/FBTCPSocket.m
+@@ -17,6 +17,23 @@ @interface FBTCPSocket()
+ 
+ @implementation FBTCPSocket
+ 
+++ (NSMutableDictionary<NSNumber *, NSDictionary *> *)bindingRegistry
++{
++  static NSMutableDictionary<NSNumber *, NSDictionary *> *registry;
++  static dispatch_once_t onceToken;
++  dispatch_once(&onceToken, ^{
++    registry = [NSMutableDictionary dictionary];
++  });
++  return registry;
++}
++
+++ (NSArray<NSDictionary *> *)listenerBindings
++{
++  @synchronized (FBTCPSocket.class) {
++    return [self bindingRegistry].allValues.copy;
++  }
++}
++
+ - (instancetype)initWithPort:(uint16_t)port
+ {
+   if ((self = [super init])) {
+@@ -36,17 +53,18 @@ - (BOOL)startWithError:(NSError **)error
+   // portString is always valid UTF8; -UTF8String is just declared nullable in general.
+   const char * _Nonnull portCString = (const char * _Nonnull)portString.UTF8String;
+ 
+-  nw_listener_t listener;
+-  if (nil != self.interface) {
+-    const char * _Nonnull interfaceCString = (const char * _Nonnull)((NSString * _Nonnull)self.interface).UTF8String;
+-    nw_endpoint_t localEndpoint = nw_endpoint_create_host(interfaceCString, portCString);
+-    nw_parameters_set_local_endpoint(parameters, localEndpoint);
+-    // The port is already encoded in localEndpoint above - do not also pass it to
+-    // nw_listener_create_with_port, which would be ambiguous.
+-    listener = nw_listener_create(parameters);
+-  } else {
+-    listener = nw_listener_create_with_port(portCString, parameters);
++  // A literal IPv4 loopback endpoint cannot create an IPv6 wildcard listener.
++  // Enforce this at the common transport, including callers that omit interface.
++  if (nil != self.interface && ![self.interface isEqualToString:@"127.0.0.1"]) {
++    if (error) {
++      *error = [NSError errorWithDomain:@"FBTCPSocket" code:4
++                              userInfo:@{NSLocalizedDescriptionKey: @"iPhone Use permits only IPv4 loopback listeners"}];
++    }
++    return NO;
+   }
++  nw_endpoint_t localEndpoint = nw_endpoint_create_host("127.0.0.1", portCString);
++  nw_parameters_set_local_endpoint(parameters, localEndpoint);
++  nw_listener_t listener = nw_listener_create(parameters);
+   if (nil == listener) {
+     if (error) {
+       *error = [NSError errorWithDomain:@"FBTCPSocket"
+@@ -72,6 +90,12 @@ - (BOOL)startWithError:(NSError **)error
+       __strong typeof(weakSelf) strongSelf = weakSelf;
+       if (strongSelf) {
+         strongSelf->_port = nw_listener_get_port(listener);
++        @synchronized (FBTCPSocket.class) {
++          [FBTCPSocket bindingRegistry][@(strongSelf.port)] = @{
++            @"policy": @"iphone-use-loopback-v1", @"listenerReady": @YES,
++            @"bindAddress": @"127.0.0.1", @"ipVersion": @4, @"port": @(strongSelf.port)
++          };
++        }
+       }
+       dispatch_semaphore_signal(startupSemaphore);
+     } else if (nw_listener_state_failed == state || nw_listener_state_cancelled == state) {
+@@ -90,6 +114,9 @@ - (BOOL)startWithError:(NSError **)error
+         }
+         startupError = [NSError errorWithDomain:@"FBTCPSocket" code:2 userInfo:userInfo];
+       }
++      @synchronized (FBTCPSocket.class) {
++        [[FBTCPSocket bindingRegistry] removeObjectForKey:@(weakSelf.port)];
++      }
+       dispatch_semaphore_signal(startupSemaphore);
+     }
+   });
+@@ -129,6 +156,21 @@ - (void)acceptConnection:(nw_connection_t)connection
+       if (nil == strongSelf) {
+         return;
+       }
++      nw_path_t path = nw_connection_copy_current_path(connection);
++      nw_endpoint_t endpoint = path ? nw_path_copy_effective_local_endpoint(path) : nil;
++      const char *hostname = endpoint ? nw_endpoint_get_hostname(endpoint) : NULL;
++      NSString *address = hostname ? [NSString stringWithUTF8String:hostname] : nil;
++      // Check the real accepted socket path before any HTTP or screenshot data.
++      if (![address isEqualToString:@"127.0.0.1"]) {
++        nw_connection_cancel(connection);
++        return;
++      }
++      @synchronized (FBTCPSocket.class) {
++        NSMutableDictionary *binding = [[FBTCPSocket bindingRegistry][@(strongSelf.port)] mutableCopy];
++        binding[@"observedLocalAddress"] = address;
++        binding[@"observedLocalPort"] = @(nw_endpoint_get_port(endpoint));
++        [FBTCPSocket bindingRegistry][@(strongSelf.port)] = binding;
++      }
+       id<FBTCPSocketDelegate> delegate = strongSelf.delegate;
+       if (nil != delegate) {
+         [delegate didClientConnect:connection];
+@@ -219,6 +261,9 @@ - (void)writeData:(NSData *)data toClient:(nw_connection_t)client completion:(nu
+ 
+ - (void)stop
+ {
++  @synchronized (FBTCPSocket.class) {
++    [[FBTCPSocket bindingRegistry] removeObjectForKey:@(self.port)];
++  }
+   NSArray<nw_connection_t> *clients;
+   @synchronized (self.connectedClients) {
+     clients = self.connectedClients.copy;
+diff --git a/WebDriverAgentLib/Routing/FBWebServer.m b/WebDriverAgentLib/Routing/FBWebServer.m
+index af0d82b3e63982188bb7d8c867916e167599efe2..535e54f6d46ce69d63d3926c954dd69e1a867a96 100644
+--- a/WebDriverAgentLib/Routing/FBWebServer.m
++++ b/WebDriverAgentLib/Routing/FBWebServer.m
+@@ -133,6 +133,7 @@ - (void)initScreenshotsBroadcaster
+   self.mjpegServer = [[FBMjpegServer alloc] init];
+   self.screenshotsBroadcaster = [[FBTCPSocket alloc]
+                                  initWithPort:(uint16_t)FBConfiguration.sharedInstance.mjpegServerPort];
++  self.screenshotsBroadcaster.interface = FBConfiguration.sharedInstance.bindingIPAddress;
+   self.mjpegServer.socket = self.screenshotsBroadcaster;
+   self.screenshotsBroadcaster.delegate = self.mjpegServer;
+   NSError *error;
+diff --git a/WebDriverAgentLib/Utilities/FBConfiguration.m b/WebDriverAgentLib/Utilities/FBConfiguration.m
+index 26c1524a5fe5c91ca7ee08a9607552e33942db8e..14e93bbe1c1f24c72910ca4002e647e3e3ff9a97 100644
+--- a/WebDriverAgentLib/Utilities/FBConfiguration.m
++++ b/WebDriverAgentLib/Utilities/FBConfiguration.m
+@@ -136,13 +136,8 @@ - (NSRange)bindingPortRange
+ 
+ - (NSString *)bindingIPAddress
+ {
+-  // Existence of USE_IP in the environment allows specifying which interface to bind to
+-  if (NSProcessInfo.processInfo.environment[@"USE_IP"] &&
+-      [NSProcessInfo.processInfo.environment[@"USE_IP"] length] > 0) {
+-    return NSProcessInfo.processInfo.environment[@"USE_IP"];
+-  }
+-
+-  return nil;
++  // iPhone Use is USB-only. Environment variables must not open a LAN listener.
++  return @"127.0.0.1";
+ }
+ 
+ - (NSInteger)mjpegServerPort

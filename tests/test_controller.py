@@ -28,6 +28,9 @@ class FakeWDA:
         self.session_id = None
         self.locked = False
         self.status_ready = True
+        self.network_policy = {"policy": "iphone-use-loopback-v1", "listeners": [
+            {"policy": "iphone-use-loopback-v1", "listenerReady": True, "bindAddress": "127.0.0.1", "ipVersion": 4, "port": port}
+            for port in (8100, 9100)]}
         self.app = "com.example.phone"
         self.size = {"width": 390, "height": 844}
         self.nodes = [node()]
@@ -67,7 +70,7 @@ class FakeWDA:
         if path == "/wda/locked":
             return {"value": self.locked}
         if path == "/status":
-            return {"value": {"ready": self.status_ready}}
+            return {"value": {"ready": self.status_ready, "iphoneUseNetwork": self.network_policy}}
         raise AssertionError("Unexpected request: " + path)
 
     def ensure_session(self):

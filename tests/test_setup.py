@@ -206,7 +206,7 @@ class SetupTests(unittest.TestCase):
     def test_start_reuses_ready_external_service_without_spawning(self):
         self.configure()
         with patch.object(self.manager, "_source", return_value=Path(self.temp.name)), \
-             patch.object(self.manager, "_probe_status", return_value={"ready": True, "reachable": True}), \
+             patch.object(self.manager, "_probe_status", return_value={"ready": True, "reachable": True, "network_hardened": True}), \
              patch.object(wda_setup.sys, "platform", "darwin"), \
              patch.object(wda_setup.shutil, "which", return_value="/usr/bin/xcodebuild"), \
              patch.object(self.manager, "_create_job") as create:
@@ -220,6 +220,7 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         wda_setup._write_json(self.manager.state_dir / "build.json", {
             "config_fingerprint": wda_setup._fingerprint(self.manager.config), "commit": wda_setup.WDA_COMMIT,
+            "network_patch_sha256": wda_setup.WDA_PATCH_SHA256,
         })
 
     def start_without_device(self):
@@ -323,7 +324,9 @@ class SetupTests(unittest.TestCase):
         (source / "WebDriverAgent.xcodeproj").mkdir(parents=True)
         (source / "WebDriverAgent.xcodeproj/project.pbxproj").write_text("fixture")
         git = bin_dir / "git"
-        git.write_text(f"#!{sys.executable}\nimport sys\nif 'rev-parse' in sys.argv: print({wda_setup.WDA_COMMIT!r})\n")
+        git.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+                       f"if 'rev-parse' in sys.argv: print({wda_setup.WDA_COMMIT!r})\n"
+                       f"if 'diff' in sys.argv: sys.stdout.write(Path({str(wda_setup.WDA_PATCH)!r}).read_text())\n")
         xcode = bin_dir / "xcodebuild"
         xcode.write_text(f"#!{sys.executable}\nimport subprocess, sys, time\nfrom pathlib import Path\n"
                          "child=subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(120)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
@@ -338,7 +341,8 @@ class SetupTests(unittest.TestCase):
         process.wait(timeout=10)
         job = wda_setup._read_json(self.manager._job_path(result["job_id"]))
         self.assertEqual(job["state"], "succeeded", job.get("error"))
-        child_pid = int((source / "child.pid").read_text())
+        hardened = self.manager.state_dir / "runtime" / ("WebDriverAgent-loopback-" + wda_setup.WDA_PATCH_SHA256[:12])
+        child_pid = int((hardened / "child.pid").read_text())
         descendant = wda_setup._run(["ps", "-p", str(child_pid), "-o", "stat="], timeout=2)
         self.assertTrue(not descendant["stdout"].strip() or descendant["stdout"].strip().startswith("Z"))
 
@@ -353,6 +357,7 @@ class SetupTests(unittest.TestCase):
         config = self.manager.config
         wda_setup._write_json(self.manager.state_dir / "build.json", {
             "config_fingerprint": wda_setup._fingerprint(config), "commit": wda_setup.WDA_COMMIT,
+            "network_patch_sha256": wda_setup.WDA_PATCH_SHA256,
         })
         job = self.job()
         job.update(config=config, worker_entrypoint=str(Path(wda_setup.__file__).resolve()), base_url=self.manager.base_url)
@@ -669,7 +674,7 @@ class SetupTests(unittest.TestCase):
         second = MagicMock()
         second.stdout = io.StringIO("")
         second.poll.side_effect = [None, 1]
-        with patch.object(wda_setup.SetupManager, "_source", return_value=Path(self.temp.name)), \
+        with patch.object(wda_setup.SetupManager, "_hardened_source", return_value=Path(self.temp.name)), \
              patch.object(wda_setup.SetupManager, "_stop_recovery_target") as stop, \
              patch.object(wda_setup.SetupManager, "_probe_status", return_value={"ready": True}) as healthy, \
              patch.object(wda_setup.subprocess, "Popen", side_effect=[first, second]) as launch, \
