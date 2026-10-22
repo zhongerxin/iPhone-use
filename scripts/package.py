@@ -18,11 +18,12 @@ TOOLING_FILES=('package.json','package-lock.json','forward.mjs','screen-stream.m
 
 def package_files(source_package=False):
     """Local docs, evals, experiments and dependency installs are never shipped."""
-    sources=[ROOT/name for name in FILES]
+    sources=[ROOT/name for name in FILES]+[ROOT/'android/README.md']
     for dirname in DIRS+(SOURCE_DIRS if source_package else ()):
         sources.extend((ROOT/dirname).rglob('*'))
     if source_package:
         sources.append(ROOT/'.gitignore')
+        sources.extend((ROOT/'android').rglob('*'))
     else:
         sources.extend(ROOT/'scripts'/name for name in INSTALL_SCRIPTS)
     sources.extend(ROOT/'tooling'/name for name in TOOLING_FILES)
@@ -30,6 +31,7 @@ def package_files(source_package=False):
         if source.is_symlink():raise SystemExit('Refusing package symlink: '+str(source))
         if not source.is_file():continue
         rel=source.relative_to(ROOT)
+        if not source_package and rel.parts[0]=='server' and source.name.startswith('android_'):continue
         if any(part in ('__pycache__','node_modules','.pytest_cache') for part in rel.parts):continue
         if source.suffix in ('.pyc','.jsonl') or source.name in ('.DS_Store','posthog.local.json','ga4.local.json'):continue
         yield source,rel

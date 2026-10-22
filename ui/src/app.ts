@@ -16,6 +16,8 @@ type Gesture = {
 type Preview = {
   server_time: number;
   stream_id?: string;
+  transport?: string;
+  capture_age_ms?: number | null;
   frame: Frame | null;
   frame_available?: boolean;
   frame_age_ms?: number | null;
@@ -60,6 +62,7 @@ let ready = false;
 let disposed = false;
 let inFlight = false;
 let frameSeq = 0;
+let streamHadFrame = false;
 let frameGeneration = 0;
 let streamId: string | undefined;
 let eventId = 0;
@@ -68,6 +71,7 @@ let viewport: Size | undefined;
 let deviceAppearance: DeviceAppearance = 'plain';
 let timer: ReturnType<typeof setTimeout> | undefined;
 let failures = 0;
+let previewBlocked = false;
 let serviceUnavailable = false;
 const cursorEffects = new Set<CursorEffect>();
 let requestedFullscreen = false;
@@ -240,10 +244,12 @@ function glowDots(step: number, phase: number) {
 }
 
 function fitFrame() {
-  const size = dimensions ?? viewport ?? { width: 440, height: 956 };
+  const android = root.dataset.platform === 'android';
+  const size = dimensions ?? viewport ?? (android ? { width: 1, height: 1 } : { width: 440, height: 956 });
   // The stage is what remains between the status pill and the toolbar.
   const width = stage.clientWidth;
   const height = stage.clientHeight;
+  if (width <= 0 || height <= 0) return;
   const shortSide = Math.min(size.width, size.height);
   const bezel = shortSide * .024;
   const inset = deviceAppearance === 'plain' ? 0 : bezel;
@@ -253,6 +259,7 @@ function fitFrame() {
   device.style.width = `${outerWidth * scale}px`;
   device.style.height = `${outerHeight * scale}px`;
   device.style.setProperty('--bezel', `${inset * scale}px`);
+  // Unknown models and Android keep every source pixel, without an iPhone mask.
   const radius = deviceAppearance === 'plain' ? 0 : shortSide * .12 * scale;
   device.style.setProperty('--screen-radius', `${radius}px`);
   const band = bezel * scale * 3.8;
@@ -278,7 +285,8 @@ function showGesture(gesture: Gesture) {
   if (screen.hidden || image.hidden) return;
   const size = validSize(gesture.viewport) ? gesture.viewport : viewport;
   if (!size) return;
-  if (dimensions && Math.abs((size.width / size.height) / (dimensions.width / dimensions.height) - 1) > .08) return;
+  const ratioTolerance = root.dataset.platform === 'android' ? .005 : .08;
+  if (dimensions && Math.abs((size.width / size.height) / (dimensions.width / dimensions.height) - 1) > ratioTolerance) return;
   const point = gesture.kind === 'tap' ? gesture.point : gesture.from;
   if (!validPoint(point)) return;
   if (gesture.kind === 'drag' && !validPoint(gesture.to)) return;
@@ -334,9 +342,10 @@ function consume(value: unknown) {
   if (typeof preview.service_ready === 'boolean') serviceUnavailable = !preview.service_ready;
   if (typeof preview.stream_id === 'string' && preview.stream_id !== streamId) {
     streamId = preview.stream_id;
+    streamHadFrame = false;
     // A replacement stream may belong to another phone; wait for its model.
     nextAppearance = 'plain';
-    model.textContent = 'iPhone';
+    model.textContent = root.dataset.platform === 'android' ? 'Android' : 'iPhone';
     // Sequence numbers restart with the server, but keep the last pixels until
     // its replacement is ready.
     frameSeq = 0;
@@ -346,7 +355,7 @@ function consume(value: unknown) {
   }
   if (typeof preview.device?.model === 'string' && preview.device.model.trim()) {
     model.textContent = preview.device.model;
-    nextAppearance = appearanceForModel(preview.device.model);
+    nextAppearance = root.dataset.platform === 'android' ? 'plain' : appearanceForModel(preview.device.model);
   }
   if (nextAppearance !== deviceAppearance) {
     deviceAppearance = nextAppearance;
@@ -380,12 +389,18 @@ function consume(value: unknown) {
   const resuming = preview.paused === false && root.dataset.live === 'paused';
   if (resuming) setLive('connecting');
   if (preview.frame_available === false) {
+    const hadAndroidFrame = root.dataset.platform === 'android' && streamHadFrame;
+    const state = resuming && !serviceUnavailable ? 'connecting'
+      : image.src || hadAndroidFrame || serviceUnavailable ? 'offline' : 'connecting';
+    if (root.dataset.platform === 'android') { clearFrame(); showEmpty(state); }
     retainFrame();
     // The stream has no frame while USB capture starts; that is still connecting.
-    setLive(resuming && !serviceUnavailable ? 'connecting' : image.src || serviceUnavailable ? 'offline' : 'connecting');
+    setLive(state);
   } else if (preview.frame_available === true || preview.frame) {
     setLive('live');
   }
+  root.dataset.transport = preview.transport || 'polling';
+  if (typeof preview.capture_age_ms === 'number') root.dataset.captureAgeMs = String(preview.capture_age_ms);
   freshUntil = typeof preview.frame_age_ms === 'number' && preview.frame_age_ms >= 0
     ? performance.now() + Math.max(0, 2000 - preview.frame_age_ms) : -Infinity;
   const frame = preview.frame;
@@ -393,6 +408,7 @@ function consume(value: unknown) {
       && typeof frame.data === 'string' && frame.data.length > 0
       && ['image/jpeg', 'image/png', 'image/webp'].includes(frame.mimeType)) {
     frameSeq = frame.seq;
+    streamHadFrame = true;
     serviceUnavailable = false;
     root.dataset.frameSeq = String(frame.seq);
     if (!dimensions || dimensions.width !== frame.width || dimensions.height !== frame.height) {
@@ -433,7 +449,7 @@ function consume(value: unknown) {
 }
 
 function schedule(delay: number) {
-  if (!visible() || timer) return;
+  if (!visible() || timer || previewBlocked) return;
   timer = setTimeout(() => {
     timer = undefined;
     void poll();
@@ -441,7 +457,7 @@ function schedule(delay: number) {
 }
 
 async function poll() {
-  if (!visible() || inFlight) return;
+  if (!visible() || inFlight || previewBlocked) return;
   inFlight = true;
   const started = performance.now();
   let nextDelay = FRAME_INTERVAL;
@@ -460,12 +476,25 @@ async function poll() {
     failures = 0;
     const preview = result.structuredContent as Partial<Preview> | undefined;
     nextDelay = preview?.paused || preview?.frame_available === false
-      ? 1000 : Math.max(0, FRAME_INTERVAL - (performance.now() - started));
+      ? 1000 : Math.max(0, (root.dataset.platform === 'android' ? 50 : FRAME_INTERVAL) - (performance.now() - started));
   } catch {
     failures += 1;
     nextDelay = Math.min(2000, 500 * failures);
     retainFrame();
-    if (failures > 1 && root.dataset.live !== 'paused' && image.src) setLive('offline');
+    if (failures > 1 && root.dataset.live !== 'paused' && (image.src || root.dataset.platform === 'android')) {
+      setLive('offline');
+      if (root.dataset.platform === 'android') {
+        // Widget timeouts do not guarantee cancellation of the host RPC.
+        // Stop adding requests to a stalled host queue until explicit refresh.
+        previewBlocked = true;
+        root.dataset.previewBlocked = 'true';
+        clearFrame();
+        showEmpty('offline');
+        emptyText.textContent = '预览通信中断，已停止重试；请点击刷新';
+        liveText.textContent = '预览通信中断';
+        liveText.title = '这不一定表示 USB 断开';
+      }
+    }
   } finally {
     inFlight = false;
     schedule(nextDelay);
@@ -476,6 +505,9 @@ async function act(name: ToolName) {
   if (acting || disposed || tools[name].disabled) return;
   const previousEmptyState = emptyState.dataset.state as EmptyState;
   if (name === 'refresh') {
+    previewBlocked = false;
+    root.dataset.previewBlocked = 'false';
+    failures = 0;
     frameGeneration++; // Ignore a poll from before this reconnect click.
     if (!image.src && root.dataset.live !== 'paused') showEmpty('connecting');
   }
@@ -488,14 +520,14 @@ async function act(name: ToolName) {
       name: 'pua_screen_action',
       arguments: { action: name },
     }, { timeout: ACTION_TIMEOUT });
-    const data = result.structuredContent as (Partial<Preview> & { service_ready?: boolean; error?: { code?: string } }) | undefined;
+    const data = result.structuredContent as (Partial<Preview> & { service_ready?: boolean; service_recovering?: boolean; error?: { code?: string } }) | undefined;
     if (result.isError || data?.error) {
       if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
       notify(FAILED[data?.error?.code ?? ''] ?? '操作未完成，请重试', true);
     } else {
       // A refresh answers with the new stream identity; take the next frame at once.
       if (name === 'refresh') consume(data);
-      notify(name === 'refresh' && data?.service_ready === false ? '未连接到手机，请确认连接后重试' : DONE[name], name === 'refresh' && data?.service_ready === false);
+      notify(data?.service_recovering ? '正在恢复手机服务，稍后点击刷新' : name === 'refresh' && data?.service_ready === false ? (root.dataset.platform === 'android' ? '手机服务未就绪，请检查连接后刷新' : '未连接到手机，请确认连接后重试') : DONE[name], !data?.service_recovering && name === 'refresh' && data?.service_ready === false);
       if (timer) clearTimeout(timer);
       timer = undefined;
       schedule(0);
@@ -517,7 +549,7 @@ type PointerStart = { id: number; point: Point; client: Point; at: number; gener
 let pointer: PointerStart | undefined;
 let viewportRetryAt = -Infinity;
 async function recoverViewport() {
-  if (!visible() || acting || root.dataset.live !== 'live' || root.dataset.inputBusy === 'true'
+  if (root.dataset.platform === 'android' || !visible() || acting || root.dataset.live !== 'live' || root.dataset.inputBusy === 'true'
       || !validSize(dimensions) || !validSize(viewport)
       || Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01
       || performance.now() < viewportRetryAt) return;
@@ -535,7 +567,7 @@ async function recoverViewport() {
   } catch { /* Keep input disabled until geometry can be verified by a later poll. */ }
 }
 function canPoint() {
-  return visible() && !acting && root.dataset.live === 'live' && root.dataset.inputBusy !== 'true'
+  return root.dataset.platform !== 'android' && visible() && !acting && root.dataset.live === 'live' && root.dataset.inputBusy !== 'true'
     && !failedFrame && !image.hidden && !!image.src && validSize(viewport) && validSize(dimensions)
     && Number.isFinite(decodedAt) && performance.now() < freshUntil
     && Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01;

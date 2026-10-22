@@ -9,3 +9,4 @@ python3 scripts/package.py --validate-only
 node --check tooling/forward.mjs
 node --check tooling/screen-stream.mjs
 python3 scripts/check_screen_ui.py
+python3 scripts/package_android.py --validate-only

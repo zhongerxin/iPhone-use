@@ -49,6 +49,10 @@ https://github.com/zhongerxin/iPhone-use
 
 仓库目前为私有，需要有 GitHub 访问权限，或者使用已取得的源代码包。
 
+## Android 支持（实验版）
+
+新增独立的 **Android Use** 插件，支持 ADB + UI Automator、中文输入、批处理、列表采集及按需屏幕预览。三星 SM-G9500 / Android 9 已完成基础真机验证。安装入口为 `sh scripts/install_android.sh`，功能范围和限制见 [Android 文档](android/README.md)。
+
 ## 在 WorkBuddy 和豆包工作中安装
 
 两者都支持通过 USB 操作真实 iPhone，并在侧边栏显示实时画面；共用本机的设备配置、WDA 构建和操作锁，已配置过的手机优先复用。依赖仍是 macOS、完整 Xcode、Python、Node.js / npm 和 USB iPhone，安装这两个适配版无需 Codex CLI。适配版默认关闭匿名使用统计。
