@@ -4,7 +4,7 @@
 
 ![iPhone Use controlling a real iPhone in Codex with a live screen preview](assets/iphone-use-demo.png)
 
-Let Codex, WorkBuddy, or Doubao Work operate your real iPhone over USB. Describe a task in natural language: open apps, read screens, tap, scroll, enter text, collect lists, and watch the phone in a sidebar widget.
+Let Codex, Claude Code, WorkBuddy, or Doubao Work operate your real iPhone over USB. Describe a task in natural language: open apps, read screens, tap, scroll, enter text, collect lists, and watch the phone preview.
 
 The plugin connects to [WebDriverAgent](https://github.com/appium/WebDriverAgent) (WDA). It includes a local MCP server, setup and usage skills, and a live screen widget. It reuses healthy connections and existing builds; when element targeting fails, it guides the model to inspect a screenshot and try coordinates.
 
@@ -48,7 +48,7 @@ Developer Mode, or unlocking needs my input, explain the exact steps and wait
 for me to complete them before continuing.
 ```
 
-A reconnect may be required to load newly installed tools. Apple account login, device trust, Developer Mode, and unlocking must be completed by the device owner in the system UI. The repository is currently private; GitHub access or a source package is required.
+A reconnect may be required to load newly installed tools. Apple account login, device trust, Developer Mode, and unlocking must be completed by the device owner in the system UI. You can also extract a source package and run the installer for your host from its root.
 
 ## Install in WorkBuddy or Doubao Work
 
@@ -111,11 +111,58 @@ wait for me. Do not copy the author's device identifiers or signing settings.
 
 If tools are missing, confirm the connector is enabled and start a new chat / Local Computer task. When both hosts use the same phone, follow the shared lock's waiting guidance. See the linked host READMEs for installation, updates, and troubleshooting.
 
+## Install in Claude Code
+
+The Claude Code plugin shares the existing MCP server, skills, device configuration, WDA builds, and operation lock, so an existing phone setup is reused. Requirements are listed below, plus a signed-in Claude Code CLI with plugin support; Codex CLI is not required. In the desktop app, use a **Local session in the Code tab** to see the phone in the right browser pane. Terminal CLI sessions can use a local browser instead.
+
+### Prompt for Claude Code
+
+```text
+Install iPhone Use on this Mac so Claude Code can operate my real iPhone over USB:
+https://github.com/zhongerxin/iPhone-use
+
+Read README.en.md, claude/README.md, and scripts/install_claude.sh first.
+Check the signed-in Claude Code CLI, Python, Node.js, npm, full Xcode, and USB iPhone.
+Clone or reuse a local checkout, preserve existing changes, and run
+sh scripts/install_claude.sh from its root. Use claude plugin list --json
+to confirm iphone-use@iphone-use-local is installed.
+Start a new Claude Code session or run /reload-plugins. If this session cannot
+load the new tools, explain what I need to do and wait for me before continuing.
+In the desktop app, use a Local session in the Code tab.
+
+Once tools are available, read iphone-use-claude and iphone-use-setup, then check
+setup status first. Reuse existing configuration, healthy WDA, or an active
+startup job. For initial setup, use my device, Apple development team, and
+signable bundle ID to fetch the pinned WDA, build, and start it.
+After pua_ready returns ready=true, show the phone screen and verify 12×34=408
+in the iPhone Calculator. A desktop version with hooks opens or reuses the
+preview automatically; if that confirmation is present, do not start it again.
+Otherwise, follow iphone-use-claude to start the viewer and open the complete
+returned url. If the browser pane is hidden, tell me to expand it. In terminal
+CLI sessions, give me the preview URL to open in a local browser.
+
+For Apple login, device trust, Developer Mode, passwords, or Face ID,
+explain the steps and wait for me to finish. Do not copy the author's device
+identifiers or signing settings.
+```
+
+### Manual installation
+
+Run from the source root:
+
+```sh
+sh scripts/install_claude.sh
+```
+
+The script registers the local marketplace `iphone-use-local` at user scope and installs `iphone-use@iphone-use-local`. Start a new Claude Code session or run `/reload-plugins` afterward. Keep the staging directory `dist/claude/` and rerun the installer after updating the source. Codex and Claude share the same phone; avoid operating it from both at once.
+
+For permissions, manual preview commands, authentication handoff, updates, and uninstalling, see [Using iPhone Use in Claude Code](claude/README.md) (Chinese).
+
 ## Requirements
 
 | Requirement | Purpose |
 | --- | --- |
-| macOS and Codex, WorkBuddy, or Doubao Work | Local MCP and screen sidebar; the Codex installer also requires Codex CLI |
+| macOS and Codex, Claude Code, WorkBuddy, or Doubao Work | Local MCP and phone preview; Codex / Claude installation also requires the corresponding CLI |
 | Full Xcode with first-launch setup completed | Build, sign, deploy, and run WDA; Command Line Tools alone are insufficient |
 | An Apple account and development team available in Xcode | Sign the on-device WDA Runner |
 | A real iPhone connected over USB | Trust the Mac, enable Developer Mode when required, and keep it unlocked during installation / startup |

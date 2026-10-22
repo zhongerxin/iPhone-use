@@ -81,6 +81,18 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(event["properties"]["analytics_schema_version"], 2)
         self.assertEqual(safe_properties({"duration_ms": -10, "batch_size": True}), {"duration_ms": 0})
 
+    def test_source_names_the_host_and_defaults_to_codex(self):
+        for host, expected in ((None, "codex_plugin_mcp"), ("claude", "claude_plugin_mcp"), ("private-host", "codex_plugin_mcp")):
+            self.events.clear()
+            environment = {"IPHONE_USE_HOST": host} if host else {}
+            with patch.dict(os.environ, environment):
+                if not host:
+                    os.environ.pop("IPHONE_USE_HOST", None)
+                analytics = self.analytics()
+                analytics.capture("iphone_use_session_started")
+                analytics.close()
+            self.assertEqual(self.events[0]["properties"]["source"], expected, host)
+
     def test_retries_share_event_uuid_and_nonretryable_errors_stop(self):
         deliveries = []
         def transient(token, batch):
