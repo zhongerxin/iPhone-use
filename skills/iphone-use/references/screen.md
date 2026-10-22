@@ -4,7 +4,7 @@ widget 为用户显示手机画面，模型只使用工具实际返回的观察�
 
 ## 没有画面或显示暂停
 
-- 首帧尚未到达时，`frame_available=false` 不证明连接失败。预览使用独立 USB MJPEG 通道，与 PUA 控制通道分开；控制工具可用而预览缺帧时，不为此反复重启 PUA、新建 session 或循环截图。
+- 首帧尚未到达时，`frame_available=false` 不证明连接失败。预览使用独立 MJPEG 通道（优先 USB，不可用时使用已配对设备的 CoreDevice 网络隧道），与 PUA 控制通道分开；控制工具可用而预览缺帧时，不为此反复重启 PUA、新建 session 或循环截图。
 - 没有任何有效画面时保留 iPhone 外壳与黑色屏幕，中央只显示对应的连接、锁屏、认证、暂停或画面不可用图标。短暂断流保留最后一帧；缓存不是当前手机状态的证据。
 - `preview.paused=true` 时先查看 `pause_reason`。`device_locked` 表示等待用户解锁，成功 READY 只恢复同一次锁屏暂停；`authentication` 或旧版 `unknown` 按 [认证接管](authentication.md) 等待用户实际完成，再显式 resume。
 - 用户可以点击底部刷新按钮重新连接预览并检查解锁；成功时恢复点击时的暂停，检查过程中发生的新暂停继续保留。刷新不重启 PUA、不新建控制会话、不发送手机手势。模型不能代调 App 专用按钮工具。
@@ -28,4 +28,4 @@ npm run build --prefix ui
 python3 scripts/check_screen_ui.py
 ```
 
-UI 不依赖 CDN 或远程字体；服务端预览依赖的 USB 流脚本与 `tooling/` 依赖清单也随插件提供。`docs/` 与 `evals/` 为本地开发资料，不是运行时依赖。
+UI 不依赖 CDN 或远程字体；服务端预览依赖的设备流脚本与 `tooling/` 依赖清单也随插件提供。`docs/` 与 `evals/` 为本地开发资料，不是运行时依赖。

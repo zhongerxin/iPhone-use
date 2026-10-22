@@ -154,6 +154,14 @@ Reconnect or start a new chat, enable **iPhone Use**, and ask:
 
 Setup covers diagnostics, device discovery, signing configuration, download, background build, and startup. Existing configurations and builds are reused. Phone tasks start only after `pua_ready` returns `ready=true`.
 
+### USB and Wi-Fi
+
+Use USB for initial installation and pairing. Once paired, keep the iPhone and Mac on the same Wi-Fi with the device reachable in Xcode. Both control and the live sidebar prefer USB, falling back to the selected device's CoreDevice tunnel without a manually entered IP. New connections prefer USB again after reconnecting the cable.
+
+The preview may briefly interrupt during a switch. Commands already sent are never replayed; wait for the live picture before continuing. Unlock the phone or restore the network/Xcode tunnel when disconnected. Wi-Fi does not remove WDA/XCTest gesture latency.
+
+Known limitation: a connected CoreDevice tunnel does not establish XCTest readiness. [#19](https://github.com/zhongerxin/iPhone-use/issues/19) reports wireless control-channel refusal and Runner exit 74 on iPhone 14 Pro / iOS 27.0.1, also reproduced with a stock XCTest template. The root cause remains undetermined; the 12-second status-probe fix does not resolve this startup failure. Preserve evidence using the [wireless XCTest troubleshooting steps (Chinese)](skills/iphone-use-setup/references/troubleshooting.md#无线-xctest-启动失败) and require READY before phone actions.
+
 ## Features
 
 | Feature | Behavior |

@@ -243,7 +243,8 @@ class SetupManager:
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             request = urllib.request.Request(self.base_url + "/status", headers={"Accept": "application/json"})
-            with opener.open(request, timeout=1.5) as response:
+            # Allow USB (5s), CoreDevice discovery (3.5s), TCP (2s), and the status reply.
+            with opener.open(request, timeout=12) as response:
                 document = json.loads(response.read(1024 * 1024))
             value = document.get("value", {})
             return {"reachable": True, "ready": value.get("ready") is True, "wda": value,
@@ -822,7 +823,7 @@ def _worker(state_dir, job_id, owner_token, base_url):
                     _write_json(path, job)
                 forward = manager.state_dir / "runtime/forward"
                 forward.mkdir(exist_ok=True, mode=0o700)
-                for name in ("package.json", "package-lock.json", "forward.mjs"):
+                for name in ("package.json", "package-lock.json", "forward.mjs", "device-transport.mjs"):
                     shutil.copyfile(PLUGIN_ROOT / "tooling" / name, forward / name)
                     (forward / name).chmod(0o600)
                 lock_hash = hashlib.sha256((forward / "package-lock.json").read_bytes()).hexdigest()

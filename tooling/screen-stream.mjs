@@ -1,4 +1,5 @@
-// A single owned USB connection to WDA's independent MJPEG port. stdout is JPEG
+import { createConnector } from './device-transport.mjs';
+// A single owned USB or paired CoreDevice connection to WDA's independent MJPEG port. stdout is JPEG
 // stream bytes only; this program never binds a listener or touches XCTest.
 import http from 'node:http';
 
@@ -11,7 +12,7 @@ if (!Number.isInteger(devicePort) || devicePort < 1024 || devicePort > 65535) pr
 
 let socket, request, response, agent;
 let stopping = false;
-const startup = setTimeout(() => stop(1), 5000);
+const startup = setTimeout(() => stop(1), 12000);
 function stop(code = 0) {
   if (stopping) return;
   stopping = true;
@@ -29,13 +30,14 @@ process.stdout.on('error', () => stop());
 
 try {
   const {default: iosDevice} = await import('appium-ios-device');
-  socket = await iosDevice.utilities.connectPort(udid, devicePort);
+  const connectDevice = createConnector((...args) => iosDevice.utilities.connectPort(...args));
+  socket = await connectDevice(udid, devicePort);
   if (stopping) socket.destroy();
   else {
     socket.setNoDelay?.(true);
     socket.on('error', () => stop(1));
     // Node's HTTP parser removes chunked-transfer framing before writing stdout.
-    // This agent always returns the already connected USB socket: no DNS/TCP hop.
+    // This agent always returns the already connected device socket: no additional connection.
     agent = new http.Agent({keepAlive: false});
     agent.createConnection = () => socket;
     request = http.request({host: '127.0.0.1', port: devicePort, path: '/',
