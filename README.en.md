@@ -234,6 +234,17 @@ sh scripts/check.sh
 python3 scripts/package.py
 ```
 
+`scripts/check.sh` runs the core Python tests, package validation, and widget tests. In a full Git checkout, also run the WorkBuddy and Doubao adapter suites separately:
+
+```sh
+IPHONE_USE_ANALYTICS=0 python3 -m unittest discover -s workbuddy/tests -v
+IPHONE_USE_ANALYTICS=0 python3 -m unittest discover -s doubao/tests -v
+```
+
+Each adapter suite runs in a separate Python process so its changes to shared server modules cannot affect the other suite. These checks use stand-ins and temporary directories; they require no iPhone and do not replace device testing.
+
+GitHub Actions reports the core `test` check, `Host adapter (workbuddy)`, and `Host adapter (doubao)` separately. If a fork PR is waiting for workflow approval, a repository maintainer must approve it in Actions; adding tests does not bypass that approval.
+
 The UI builds into self-contained HTML. Source packages are written to `dist/iphone-use-<version>-source.zip`; normal installation and use do not require rebuilding the UI. Installed plugins retain the complete widget source, styles, build scripts, configuration, dependency lockfile, and widget tests for local maintenance.
 
 See [screen preview and recovery](skills/iphone-use/references/screen.md), [app identifiers](skills/iphone-use/references/apps.md), [troubleshooting](skills/iphone-use-setup/references/troubleshooting.md), and [changelog](CHANGELOG.md).

@@ -211,8 +211,27 @@ while True:
 """ % sys.executable
 
 
+def wait_for_playback(case, read, after_seq, seconds=8):
+    """Wait for a batch, without assuming a shared runner sustains the fixture's 20 fps."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        shown = read(after_seq)
+        if shown.get("frame") and len(shown.get("more", [])) >= 4:
+            return shown
+        time.sleep(0.05)
+    case.fail("no playback batch with at least five frames arrived")
+
+
 class PreviewTests(unittest.TestCase):
     """The panel's frame reads, each answered by a server process of its own, as WorkBuddy does."""
+
+    def test_loopback_listener_does_not_require_reverse_dns(self):
+        with mock.patch.object(socket, "getfqdn", side_effect=AssertionError("unexpected reverse DNS")):
+            server, address = preview.direct_server(None, lambda: None)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.assertEqual(server.server_address[0], "127.0.0.1")
+        self.assertTrue(address.startswith(f"http://127.0.0.1:{server.server_port}/"))
 
     def setUp(self):
         self.state = Path(short_state_directory(self))
@@ -262,10 +281,9 @@ class PreviewTests(unittest.TestCase):
     def test_a_read_carries_the_frames_since_the_last_one_for_playback(self):
         frame = self.frame_after(0)["frame"]
         self.assertNotIn("more", self.read(0))
-        time.sleep(0.4)
-        shown = self.read(frame["seq"])
+        shown = wait_for_playback(self, self.read, frame["seq"])
         played = shown["more"] + [shown["frame"]]
-        # The stand-in stream is 20 frames a second: several frames, in order, none missing, none stale.
+        # Several frames, in order, none missing, none stale.
         self.assertGreater(len(played), 4)
         self.assertEqual([each["seq"] for each in played], list(range(played[0]["seq"], played[-1]["seq"] + 1)))
         self.assertEqual(sorted(each["at"] for each in played), [each["at"] for each in played])
@@ -406,7 +424,14 @@ class InstallTests(unittest.TestCase):
         self.assertEqual((frame["uri"], frame["mimeType"]), (uri, "application/json"))
         # No phone is configured in this state directory: a real preview answer, without a picture.
         self.assertEqual(json.loads(frame["text"])["frame_available"], False)
-        self.assertEqual(json.loads(frame["text"]).keys(), replies[4]["result"]["structuredContent"].keys())
+        resource_frame = json.loads(frame["text"])
+        tool_frame = replies[4]["result"]["structuredContent"]
+        # These sequential reads can straddle preview startup. The optional
+        # direct endpoint appears only after the detached source is ready.
+        self.assertEqual(resource_frame.keys() - {"direct"}, tool_frame.keys() - {"direct"})
+        for shown in (resource_frame, tool_frame):
+            if "direct" in shown:
+                self.assertRegex(shown["direct"], r"^http://127\.0\.0\.1:\d+/[\w-]{32}$")
         self.assertIn("-workbuddy-", replies[2]["result"]["resources"][0]["uri"])
 
     def test_install_ships_the_runtime_without_codex_manifests(self):

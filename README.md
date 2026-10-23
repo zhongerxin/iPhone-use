@@ -230,6 +230,17 @@ sh scripts/check.sh
 python3 scripts/package.py
 ```
 
+`scripts/check.sh` 会运行核心 Python 测试、打包校验和屏幕组件测试。在完整 Git 源码目录中，还需分别运行 WorkBuddy 和豆包适配测试：
+
+```sh
+IPHONE_USE_ANALYTICS=0 python3 -m unittest discover -s workbuddy/tests -v
+IPHONE_USE_ANALYTICS=0 python3 -m unittest discover -s doubao/tests -v
+```
+
+两套适配测试分别在独立 Python 进程中运行，避免对共享服务模块的改写互相影响。这些检查使用替身和临时目录，不需要连接 iPhone，也不能替代真机验证。
+
+GitHub Actions 会分别显示核心检查 `test`、`Host adapter (workbuddy)` 和 `Host adapter (doubao)`。来自 fork 的 PR 若等待维护者批准运行工作流，需要仓库维护者在 Actions 页面批准；增加测试代码不会绕过这项审批。
+
 构建结果是自包含屏幕 HTML，源代码包位于 `dist/iphone-use-<版本>-source.zip`。安装和普通使用不需要重新构建 UI。安装后的插件仍完整保留 widget 的源码、样式、构建脚本、配置、依赖锁文件和测试，便于本地维护。
 
 - [屏幕预览与恢复](skills/iphone-use/references/screen.md)

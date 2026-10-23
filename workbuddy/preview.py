@@ -30,6 +30,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+from socketserver import TCPServer
 import sys
 import threading
 import time
@@ -120,6 +121,13 @@ def direct_server(hub, asked):
     """The loopback HTTP side: GET /<token>/frame/<after_seq>/<last_event_id>[?wait=<ms>]."""
     token = secrets.token_urlsafe(24)
 
+    class LoopbackServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # HTTPServer resolves a hostname here. This listener uses a numeric
+            # loopback address only; reverse DNS can stall preview startup.
+            TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address
+
     class Direct(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -150,7 +158,7 @@ def direct_server(hub, asked):
         def log_message(self, *arguments):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Direct)
+    server = LoopbackServer(("127.0.0.1", 0), Direct)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, name="preview-direct", daemon=True).start()
     return server, "http://127.0.0.1:%d/%s" % (server.server_port, token)

@@ -168,10 +168,10 @@ class HostTests(unittest.TestCase):
         host = Host(self, self.env)
         frame = self.first_frame(host)
         self.assertEqual((frame["width"], frame["height"], frame["mimeType"]), (440, 956, "image/jpeg"))
-        time.sleep(0.4)
-        shown = host.frame(frame["seq"])["result"]["structuredContent"]
+        shown = workbuddy_tests.wait_for_playback(
+            self, lambda seq: host.frame(seq)["result"]["structuredContent"], frame["seq"])
         played = shown["more"] + [shown["frame"]]
-        # The stand-in stream is 20 frames a second: several frames, in order, none missing.
+        # Several frames, in order, none missing.
         self.assertGreater(len(played), 4)
         self.assertEqual([each["seq"] for each in played], list(range(played[0]["seq"], played[-1]["seq"] + 1)))
         self.assertEqual(sorted(each["at"] for each in played), [each["at"] for each in played])
