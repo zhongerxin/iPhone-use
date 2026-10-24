@@ -1,5 +1,5 @@
 import net from 'node:net';
-import iosDevice from 'appium-ios-device';
+import {connectDevicePort} from './device-transport.mjs';
 
 const [udid, localArgument = '18100', deviceArgument = '8100'] = process.argv.slice(2);
 if (!/^[A-Za-z0-9-]{8,64}$/.test(udid ?? '')) throw new Error('Provide a valid device UDID.');
@@ -19,7 +19,7 @@ const server = net.createServer(async client => {
   client.on('error', () => client.destroy());
   client.on('close', () => sockets.delete(client));
   try {
-    const remote = await iosDevice.utilities.connectPort(udid, devicePort);
+    const remote = await connectDevicePort(udid, devicePort);
     if (stopping || client.destroyed) { remote.destroy(); return; }
     remote.setNoDelay?.(true);
     sockets.add(remote);
@@ -28,12 +28,12 @@ const server = net.createServer(async client => {
     client.on('close', () => remote.destroy());
     client.pipe(remote).pipe(client);
   } catch (error) {
-    console.error(`USB connect failed: ${error.message}`);
+    console.error(`Device connection unavailable.`);
     client.destroy();
   }
 });
-server.on('error', error => { console.error(`USB forward failed: ${error.message}`); process.exitCode = 1; stop(); });
-server.listen(localPort, '127.0.0.1', () => console.log(`WDA USB forward listening at 127.0.0.1:${localPort}`));
+server.on('error', error => { console.error(`Device forward failed: ${error.message}`); process.exitCode = 1; stop(); });
+server.listen(localPort, '127.0.0.1', () => console.log(`WDA device forward listening at 127.0.0.1:${localPort}`));
 function stop() {
   if (stopping) return;
   stopping = true;

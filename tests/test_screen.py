@@ -313,6 +313,7 @@ class ScreenHubTests(unittest.TestCase):
             command = self.hub._command()
             self.assertEqual(command[-2:], ["TEST-DEVICE-1234", "9100"])
             self.assertEqual(Path(command[1]).read_bytes(), (ROOT / "tooling/screen-stream.mjs").read_bytes())
+            self.assertEqual((Path(command[1]).parent / "device-transport.mjs").read_bytes(), (ROOT / "tooling/device-transport.mjs").read_bytes())
             self.assertNotIn("secret", Path(command[1]).read_text())
             self.assertEqual(os.stat(command[1]).st_mode & 0o777, 0o600)
         (self.directory / "config.json").write_text('{"udid":"TEST-DEVICE-1234", "mjpeg_device_port":"http://remote"}')
@@ -320,6 +321,91 @@ class ScreenHubTests(unittest.TestCase):
 
 
 class NodeStreamTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is not installed.")
+    def test_paired_wifi_stream_delivers_frames_after_usb_failure(self):
+        body = b"--frame\r\n\r\n" + jpeg() + b"\r\n"
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                requests.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                runtime = Path(temporary)
+                for name in ("screen-stream.mjs", "device-transport.mjs"):
+                    shutil.copyfile(ROOT / "tooling" / name, runtime / name)
+                stub = runtime / "node_modules/appium-ios-device"
+                stub.mkdir(parents=True)
+                (stub / "package.json").write_text('{"type":"module","main":"index.js"}')
+                (stub / "index.js").write_text("export default {utilities:{connectPort: async () => {throw Error('USB absent')}}};")
+                details = {"info": {"outcome": "success"}, "result": {"devices": [{
+                    "hardwareProperties": {"udid": "TEST-DEVICE-1234"}, "connectionProperties": {
+                        "pairingState": "paired", "tunnelState": "connected", "tunnelIPAddress": "fd00::1"}}]}}
+                executable = runtime / "xcrun"
+                executable.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n"
+                                      "Path(sys.argv[-1]).write_text(" + repr(json.dumps(details)) + ")\n")
+                executable.chmod(0o700)
+                # Replace only the OS TCP destination at the module boundary;
+                # exercise device selection, HTTP framing and stdout unchanged.
+                (runtime / "net-fixture.mjs").write_text(
+                    "import net from 'node:net'; export default {...net, connect: options => {"
+                    "if(options.host !== 'fd00::1' || options.port !== 9100) throw Error('Wrong target');"
+                    + f"return net.connect({server.server_port},'127.0.0.1');" + "}};")
+                (runtime / "loader.mjs").write_text(
+                    "export async function resolve(s,c,next){"
+                    "if(s==='node:net' && c.parentURL?.endsWith('/device-transport.mjs'))"
+                    "return {url:new URL('./net-fixture.mjs',import.meta.url).href,shortCircuit:true};"
+                    "return next(s,c)}")
+                result = subprocess.run([shutil.which("node"), "--no-warnings", "--experimental-loader",
+                                         str(runtime / "loader.mjs"), str(runtime / "screen-stream.mjs"),
+                                         "TEST-DEVICE-1234", "9100"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        timeout=5, env={**os.environ, "PATH": str(runtime) + os.pathsep + os.environ.get("PATH", "")})
+                self.assertEqual(result.stdout, body)
+                self.assertEqual(result.stderr, b"")
+                self.assertEqual(requests, ["/"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    @unittest.skipUnless(shutil.which("node"), "Node is not installed.")
+    def test_wifi_fallback_rejects_unpaired_wrong_device_and_untrusted_tunnels(self):
+        for hardware, pairing, tunnel in (("OTHER-DEVICE-1234", "paired", "fd00::1"),
+                                           ("TEST-DEVICE-1234", "unpaired", "fd00::1"),
+                                           ("TEST-DEVICE-1234", "paired", "2001:db8::1")):
+            with self.subTest(hardware=hardware, pairing=pairing, tunnel=tunnel), tempfile.TemporaryDirectory() as temporary:
+                runtime = Path(temporary)
+                for name in ("screen-stream.mjs", "device-transport.mjs"):
+                    shutil.copyfile(ROOT / "tooling" / name, runtime / name)
+                stub = runtime / "node_modules/appium-ios-device"
+                stub.mkdir(parents=True)
+                (stub / "package.json").write_text('{"type":"module","main":"index.js"}')
+                (stub / "index.js").write_text("export default {utilities:{connectPort: async () => {throw Error('USB absent')}}};")
+                details = {"info": {"outcome": "success"}, "result": {"devices": [{
+                    "hardwareProperties": {"udid": hardware}, "connectionProperties": {
+                        "pairingState": pairing, "tunnelState": "connected", "tunnelIPAddress": tunnel}}]}}
+                executable = runtime / "xcrun"
+                executable.write_text("#!" + sys.executable + "\nimport json,sys\nfrom pathlib import Path\n"
+                                      "assert sys.argv[1:4] == ['devicectl','list','devices']\n"
+                                      "Path(sys.argv[-1]).write_text(" + repr(json.dumps(details)) + ")\n")
+                executable.chmod(0o700)
+                result = subprocess.run([shutil.which("node"), str(runtime / "screen-stream.mjs"),
+                                         "TEST-DEVICE-1234", "9100"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        timeout=5, env={**os.environ, "PATH": str(runtime) + os.pathsep + os.environ.get("PATH", "")})
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertEqual(result.stderr, b"")
+
     @unittest.skipUnless(shutil.which("node"), "Node is not installed.")
     def test_paused_usb_socket_dechunks_binary_body_and_requests_only_stream_root(self):
         body = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg() + b"\r\n--frame--\r\n"
@@ -351,6 +437,7 @@ class NodeStreamTests(unittest.TestCase):
                 runtime = Path(temporary)
                 script = runtime / "screen-stream.mjs"
                 script.write_bytes((ROOT / "tooling/screen-stream.mjs").read_bytes())
+                shutil.copyfile(ROOT / "tooling/device-transport.mjs", runtime / "device-transport.mjs")
                 stub = runtime / "node_modules/appium-ios-device"
                 stub.mkdir(parents=True)
                 (stub / "package.json").write_text('{"type":"module","main":"index.js"}')

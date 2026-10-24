@@ -249,3 +249,7 @@ MIT License. See [third-party notices](THIRD_PARTY_NOTICES.md).
 ### Direct preview interaction
 
 Click the live phone image to tap, or drag and release to swipe. Coordinates follow the displayed image as the panel resizes. Two-finger trackpad scrolling and mouse wheels scroll or page the phone, following the system scroll direction. Each wheel burst sends one swipe; momentum and input received during an operation are not queued. Long presses, phone multi-touch, pinch zoom, and keyboard input are not supported. Input is disabled while the preview is paused, offline, stale, or busy. Cancelled gestures and releases outside the image do nothing. Timed-out gestures are never replayed automatically; inspect the phone before trying again.
+
+### Paired Wi-Fi transport
+
+USB remains preferred. When unavailable, control and MJPEG preview can reuse the configured device’s connected Xcode CoreDevice IPv6 tunnel. The device UDID must match and pairing must already be complete. This does not scan the LAN, establish pairing, or accept arbitrary remote URLs. Existing preview leases, authentication pauses and memory-only frames still apply.

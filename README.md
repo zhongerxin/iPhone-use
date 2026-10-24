@@ -244,3 +244,7 @@ python3 scripts/package.py
 感谢 Appium、WebDriverAgent 及相关项目的维护者和贡献者，让真实 iPhone 的自动化操作成为可能。
 
 MIT License。第三方组件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+### 已配对设备的 Wi-Fi 通道
+
+优先使用 USB。USB 不可用时，控制和 MJPEG 预览可以复用配置 UDID 对应设备的 Xcode CoreDevice 已连接 IPv6 隧道；设备必须已经配对。不扫描局域网、不建立新配对、不接受任意远程 URL。预览可见租约、认证暂停和仅内存保存画面的行为保持有效。

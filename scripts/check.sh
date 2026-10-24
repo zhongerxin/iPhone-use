@@ -8,4 +8,5 @@ python3 -m unittest discover -s tests -v
 python3 scripts/package.py --validate-only
 node --check tooling/forward.mjs
 node --check tooling/screen-stream.mjs
+node --check tooling/device-transport.mjs
 python3 scripts/check_screen_ui.py
