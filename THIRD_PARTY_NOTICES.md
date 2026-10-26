@@ -430,3 +430,33 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 The complete list of contributors can be found at:
 - https://github.com/garycourt/uri-js/graphs/contributors
 ```
+
+## Appoly iPhoneDuoFrameSimulator geometry reference
+
+The Duo cover-portrait preview references the 59-point free-edge corner radius in [Appoly iPhoneDuoFrameSimulator](https://github.com/appoly/iPhoneDuoFrameSimulator/blob/152861d9dd57327d72c72b55f1fa3aa19ad6030f/Sources/DuoFrameSimulator/DuoFrameCornerRadii.swift#L21). This is the author's measurement from the iOS 27.1 simulator, not an Apple-certified hardware constant. The left-edge radius of zero follows device-owner feedback, replacing the reference's estimated six-point hinge radius. This approximation is used only for a confirmed 466 × 678 point cover-portrait viewport; other Duo viewports keep a neutral frame. No native Swift simulator runtime or artwork is bundled.
+
+Source commit: `152861d9dd57327d72c72b55f1fa3aa19ad6030f`. The complete license is retained here because this notice ships in both source and install packages.
+
+```text
+MIT License
+
+Copyright (c) 2026 Appoly
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

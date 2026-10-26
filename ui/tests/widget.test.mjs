@@ -664,6 +664,141 @@ test('plain portrait and landscape screens preserve the complete frame and gestu
   }
 });
 
+test('iPhone Duo fits all four screen proportions and rounds only confirmed cover portrait corners', async () => {
+  const h = await harness();
+  let seq = 0;
+  for (const [width, height, stageWidth, stageHeight] of [[669, 951, 376, 776], [951, 669, 520, 250], [466, 678, 190, 360], [678, 466, 320, 180]]) {
+    Object.assign(h.stageSize, { width: stageWidth, height: stageHeight });
+    // Reproduce switching from an island phone, then unfolding/folding and rotating.
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 15 Pro' } }) });
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' },
+      frame: { ...frame(++seq), width: width * 3, height: height * 3 }, viewport: { width, height },
+      events: [{ id: seq, kind: 'tap', at: 1000, point: { x: width / 4, y: height / 2 } }] }) });
+    assert.equal(h.elements.model.textContent, 'iPhone Duo');
+    assert.equal(h.elements.device.dataset.appearance, 'duo');
+    const bezel = parseFloat(h.elements.device.style['--bezel']);
+    assert.ok(bezel > 0);
+    const displayWidth = parseFloat(h.elements.device.style.width);
+    const displayHeight = parseFloat(h.elements.device.style.height);
+    const coverPortrait = width === 466 && height === 678;
+    assert.equal(h.elements.device.dataset.duoScreen, coverPortrait ? 'cover-portrait' : 'neutral');
+    const radius = parseFloat(h.elements.device.style['--screen-radius']);
+    assert.ok(Math.abs(radius - (coverPortrait ? 59 * (displayWidth - 2 * bezel) / width : 0)) < 1e-8);
+    const mask = decodeURIComponent(h.elements.device.style['--glow-mask']);
+    assert.ok(mask.includes(coverPortrait ? "<path d='M 0 0 H " : "rx='0'"));
+    assert.ok(Math.abs((displayWidth - 2 * bezel) / (displayHeight - 2 * bezel) - width / height) < 1e-8);
+    assert.ok(displayWidth <= h.stageSize.width && displayHeight <= h.stageSize.height);
+    assert.equal(h.elements.cursor.style.left, '25%');
+    assert.equal(h.elements.cursor.style.top, '50%');
+    assert.equal(h.elements.device.dataset.orientation, width > height ? 'landscape' : 'portrait');
+  }
+});
+
+test('Duo cover corner styling follows point viewport updates without replacing the image', async () => {
+  const h = await harness();
+  h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' },
+    frame: { ...frame(1), width: 1398, height: 2034 } }) });
+  assert.equal(h.elements.device.dataset.duoScreen, 'neutral', 'Frame dimensions alone do not select a cover');
+  const writes = h.imageWrites;
+  h.app.ontoolresult({ structuredContent: preview({ viewport: { width: 466, height: 678 } }) });
+  assert.equal(h.elements.device.dataset.duoScreen, 'cover-portrait');
+  assert.ok(parseFloat(h.elements.device.style['--screen-radius']) > 0);
+  for (const [width, height] of [[669, 951], [951, 669], [678, 466], [420, 610]]) {
+    h.app.ontoolresult({ structuredContent: preview({ viewport: { width, height } }) });
+    assert.equal(h.elements.device.dataset.duoScreen, 'neutral');
+    assert.equal(h.elements.device.style['--screen-radius'], '0px');
+  }
+  assert.equal(h.imageWrites, writes);
+  h.app.ontoolresult({ structuredContent: preview({ viewport: { width: 466, height: 678 } }) });
+  assert.equal(h.elements.device.dataset.duoScreen, 'cover-portrait');
+  h.app.ontoolresult({ structuredContent: preview({ frame: { ...frame(2), width: 2007, height: 2853 } }) });
+  assert.equal(h.elements.device.dataset.duoScreen, 'neutral', 'A stale cover viewport cannot round an unfolded frame');
+
+  const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+  const cover = '#device[data-appearance="duo"][data-duo-screen="cover-portrait"]';
+  assert.ok(css.includes(`${cover}{border-radius:0 calc(var(--screen-radius) + var(--bezel)) calc(var(--screen-radius) + var(--bezel)) 0}`));
+  assert.ok(css.includes(`${cover}::before{border-radius:0 calc(var(--screen-radius) + var(--bezel) * .76) calc(var(--screen-radius) + var(--bezel) * .76) 0}`));
+  assert.ok(css.includes(`${cover} #screen{border-radius:0 var(--screen-radius) var(--screen-radius) 0}`));
+});
+
+test('Duo metadata keeps the bezel through partial updates and removes it for other models', async () => {
+  const h = await harness();
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'duo', device: { model: '  iPhone   Duo ' },
+    frame: frame(1) }) });
+  const pixels = h.elements.image.src;
+  assert.equal(h.elements.device.dataset.appearance, 'duo');
+  for (const device of [undefined, null, { model: 'iPhone Duo' }]) {
+    h.app.ontoolresult({ structuredContent: preview({ device, frame_available: true }) });
+    assert.equal(h.elements.device.dataset.appearance, 'duo');
+    assert.ok(parseFloat(h.elements.device.style['--bezel']) > 0);
+    assert.equal(h.elements.image.src, pixels);
+  }
+  for (const model of ['iPhone Duo Prototype', 'iPhone Duo Cover', 'iPhone19,4', 'iPad Duo']) {
+    h.app.ontoolresult({ structuredContent: preview({ device: { model } }) });
+    assert.equal(h.elements.device.dataset.appearance, 'plain', model);
+    assert.equal(h.elements.device.style['--bezel'], '0px');
+    assert.equal(h.elements.image.src, pixels);
+  }
+  h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' } }) });
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'unknown', frame: frame(1) }) });
+  assert.equal(h.elements.device.dataset.appearance, 'plain');
+  assert.equal(h.elements.device.style['--bezel'], '0px');
+});
+
+test('Duo pointer coordinates exclude the bezel for every screen orientation', async () => {
+  for (const [width, height] of [[669, 951], [951, 669], [466, 678], [678, 466]]) {
+    const h = await harness();
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' },
+      frame: { ...frame(1), width: width * 3, height: height * 3 }, viewport: { width, height } }) });
+    h.elements.image.onload();
+    const bezel = parseFloat(h.elements.device.style['--bezel']);
+    const rect = { left: 50 + bezel, top: 70 + bezel,
+      width: parseFloat(h.elements.device.style.width) - 2 * bezel,
+      height: parseFloat(h.elements.device.style.height) - 2 * bezel };
+    h.elements.screen.getBoundingClientRect = () => rect;
+    const tap = (x, y) => {
+      h.elements.screen.handlers.get('pointerdown')(pointerEvent(x, y));
+      h.elements.screen.handlers.get('pointerup')(pointerEvent(x, y));
+    };
+    tap(rect.left - bezel / 2, rect.top + rect.height / 2);
+    await flush();
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0, 'The bezel cannot send phone input');
+    tap(rect.left + rect.width / 4, rect.top + rect.height / 2);
+    await flush();
+    const actions = h.calls.filter(c => c.name === 'pua_screen_action');
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0].arguments.action, 'tap');
+    assert.ok(Math.abs(actions[0].arguments.x - width / 4) < .01);
+    assert.ok(Math.abs(actions[0].arguments.y - height / 2) < .01);
+    assert.equal(actions[0].arguments.width, width);
+    assert.equal(actions[0].arguments.height, height);
+  }
+});
+
+test('Duo cover masked right corners reject input while square left corners remain interactive', async () => {
+  for (const [x, y, allowed] of [[1, 1, true], [1, 677, true], [465, 1, false], [465, 677, false], [465, 339, true], [437, 30, true]]) {
+    const h = await harness();
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' },
+      frame: { ...frame(1), width: 1398, height: 2034 }, viewport: { width: 466, height: 678 } }) });
+    h.elements.image.onload();
+    const bezel = parseFloat(h.elements.device.style['--bezel']);
+    const rect = { left: 40 + bezel, top: 60 + bezel,
+      width: parseFloat(h.elements.device.style.width) - 2 * bezel,
+      height: parseFloat(h.elements.device.style.height) - 2 * bezel };
+    h.elements.screen.getBoundingClientRect = () => rect;
+    const event = pointerEvent(rect.left + x / 466 * rect.width, rect.top + y / 678 * rect.height);
+    h.elements.screen.handlers.get('pointerdown')(event);
+    h.elements.screen.handlers.get('pointerup')(event);
+    await flush();
+    const actions = h.calls.filter(c => c.arguments.action === 'tap');
+    assert.equal(actions.length, allowed ? 1 : 0, `Cover point ${x},${y}`);
+    if (allowed) {
+      assert.ok(Math.abs(actions[0].arguments.x - x) < .01);
+      assert.ok(Math.abs(actions[0].arguments.y - y) < .01);
+    }
+  }
+});
+
 test('late model metadata refits the current frame, survives pauses and resets for a replacement stream', async () => {
   const h = await harness();
   h.app.ontoolresult({ structuredContent: preview({ stream_id: 'first', frame: frame(1) }) });
@@ -1027,4 +1162,41 @@ test('viewport recovery failures are throttled while frame polling continues', a
   assert.equal(h.calls.filter(c => c.name === 'pua_screen_frame').length, 8);
   await h.tick();
   assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 2);
+});
+
+test('existing viewport recovery refits folded Duo corners and updates input coordinates', async () => {
+  let resolveViewport;
+  const h = await harness({ reply: params => params.arguments.action === 'viewport'
+    ? new Promise(resolve => { resolveViewport = resolve; })
+    : Promise.resolve({ structuredContent: preview({ frame_available: true,
+        frame: { ...frame(2), width: 1398, height: 2034 }, viewport: { width: 669, height: 951 } }) }) });
+  h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' },
+    frame: { ...frame(1), width: 2007, height: 2853 }, viewport: { width: 669, height: 951 } }) });
+  await h.tick();
+  h.elements.image.onload();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 1);
+  assert.equal(h.elements.device.dataset.duoScreen, 'neutral');
+  const bezel = parseFloat(h.elements.device.style['--bezel']);
+  const rect = { left: bezel, top: bezel,
+    width: parseFloat(h.elements.device.style.width) - 2 * bezel,
+    height: parseFloat(h.elements.device.style.height) - 2 * bezel };
+  h.elements.screen.getBoundingClientRect = () => rect;
+  const click = () => {
+    const event = pointerEvent(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    h.elements.screen.handlers.get('pointerdown')(event);
+    h.elements.screen.handlers.get('pointerup')(event);
+  };
+  click(); await flush();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'tap').length, 0);
+  resolveViewport({ structuredContent: { viewport: { width: 466, height: 678 } } });
+  await flush();
+  assert.equal(h.elements.device.dataset.duoScreen, 'cover-portrait');
+  assert.ok(parseFloat(h.elements.device.style['--screen-radius']) > 0);
+  click(); await flush();
+  const tap = h.calls.find(c => c.arguments.action === 'tap');
+  assert.equal(tap.arguments.width, 466);
+  assert.equal(tap.arguments.height, 678);
+  assert.equal(tap.arguments.x, 233);
+  assert.equal(tap.arguments.y, 339);
+  assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 1);
 });

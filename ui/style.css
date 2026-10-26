@@ -35,6 +35,14 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .receiver{position:absolute;left:50%;top:calc(var(--bezel) * .36);z-index:3;width:15%;height:calc(var(--bezel) * .19);transform:translateX(-50%);border-radius:999px;background:#030405;box-shadow:0 .5px 0 #ffffff19;pointer-events:none}
 #device[data-appearance="plain"]{border-radius:0;background:none;box-shadow:none}
 #device[data-appearance="plain"]::before,#device[data-appearance="plain"] .side-button,#device[data-appearance="plain"] .receiver{display:none}
+/* Duo reuses the external bezel. Only the confirmed cover portrait viewport gets
+   its left-straight, right-rounded display mask; other viewports stay neutral. */
+#device[data-appearance="duo"]{background:linear-gradient(115deg,#dadce0 0%,#74787e 15%,#b9bdc3 32%,#565b62 56%,#c8cbd0 82%,#858a92 100%);box-shadow:0 0 0 .7px #16181cbf,0 10px 24px -12px #00000066,inset 0 0 0 .5px #ffffff5c}
+#device[data-appearance="duo"]::before{background:#090a0c;box-shadow:0 0 0 .6px #020304,inset 0 0 0 .5px #ffffff14}
+#device[data-appearance="duo"] .side-button,#device[data-appearance="duo"] .receiver{display:none}
+#device[data-appearance="duo"][data-duo-screen="cover-portrait"]{border-radius:0 calc(var(--screen-radius) + var(--bezel)) calc(var(--screen-radius) + var(--bezel)) 0}
+#device[data-appearance="duo"][data-duo-screen="cover-portrait"]::before{border-radius:0 calc(var(--screen-radius) + var(--bezel) * .76) calc(var(--screen-radius) + var(--bezel) * .76) 0}
+#device[data-appearance="duo"][data-duo-screen="cover-portrait"] #screen{border-radius:0 var(--screen-radius) var(--screen-radius) 0}
 #device[data-orientation="landscape"] .side-button{left:auto;top:calc(var(--bezel) * -.22);height:calc(var(--bezel) * .27);background:linear-gradient(180deg,#5a5956,#b1aea7 55%,#5e5c59)}
 #device[data-orientation="landscape"] .action-button{left:15%;width:3.7%}
 #device[data-orientation="landscape"] .volume-up{left:23%;width:6.4%}

@@ -29,7 +29,7 @@ type Preview = {
   device?: { model?: string } | null;
 };
 type LiveState = 'connecting' | 'live' | 'paused' | 'offline';
-type DeviceAppearance = 'plain' | 'rounded' | 'dynamic-island';
+type DeviceAppearance = 'plain' | 'rounded' | 'dynamic-island' | 'duo';
 type EmptyState = 'connecting' | 'offline' | 'locked' | 'authentication' | 'paused' | 'unavailable';
 type ToolName = 'refresh' | 'home' | 'screenshot';
 type CursorEffect = { node: HTMLElement; animation?: Animation; timer?: ReturnType<typeof setTimeout> };
@@ -115,6 +115,7 @@ const ROUNDED_MODELS = new Set([
 
 function appearanceForModel(value: string): DeviceAppearance {
   const name = value.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (name === 'iphone duo') return 'duo';
   if (ISLAND_MODELS.has(name)) return 'dynamic-island';
   if (ROUNDED_MODELS.has(name)) return 'rounded';
   // Older phones, SE, other devices and unknown models get an unclipped screen.
@@ -203,8 +204,15 @@ const visible = () => !disposed && !suspended && !document.hidden;
 
 // Bake each soft ring phase once per layout. Top/bottom centers retain a little light,
 // then join more strongly as the existing color and dot phases crossfade.
-function glowMask(width: number, height: number, radius: number, band: number, bridge: number) {
+function glowMask(width: number, height: number, radius: number, band: number, bridge: number, rightOnly = false) {
   const round = (value: number) => Math.round(value * 100) / 100;
+  const outline = (inset: number, radius: number, attributes: string) => {
+    const r = round(Math.max(0, radius - inset));
+    const right = round(width - inset), bottom = round(height - inset);
+    return rightOnly
+      ? `<path d='M ${inset} ${inset} H ${round(right - r)} A ${r} ${r} 0 0 1 ${right} ${round(inset + r)} V ${round(bottom - r)} A ${r} ${r} 0 0 1 ${round(right - r)} ${bottom} H ${inset} Z' ${attributes}/>`
+      : `<rect x='${inset}' y='${inset}' width='${round(width - 2 * inset)}' height='${round(height - 2 * inset)}' rx='${r}' ${attributes}/>`;
+  };
   const bloom = Math.min(width, height) * .27;
   const corners = [[0, 0], [width, 0], [0, height], [width, height]]
     .map(([x, y]) => `<circle cx='${round(x)}' cy='${round(y)}' r='${round(bloom)}'/>`).join('');
@@ -215,8 +223,8 @@ function glowMask(width: number, height: number, radius: number, band: number, b
     + `<filter id='f' x='-30%' y='-30%' width='160%' height='160%'><feGaussianBlur stdDeviation='${round(band * .3)}'/></filter>`
     + `<filter id='g' x='-60%' y='-60%' width='220%' height='220%'><feGaussianBlur stdDeviation='${round(bloom * .42)}'/></filter>`
     + `<g mask='url(#corners)'><g fill='#fff' fill-opacity='.46' filter='url(#g)'>${corners}</g>`
-    + `<rect width='${round(width)}' height='${round(height)}' rx='${round(radius)}' fill='none' stroke='#fff' stroke-width='${round(band * .9)}' filter='url(#f)'/>`
-    + `<rect x='.75' y='.75' width='${round(width - 1.5)}' height='${round(height - 1.5)}' rx='${round(Math.max(0, radius - .75))}' fill='none' stroke='#fff' stroke-opacity='.9' stroke-width='1.5'/></g></svg>`;
+    + outline(0, radius, `fill='none' stroke='#fff' stroke-width='${round(band * .9)}' filter='url(#f)'`)
+    + outline(.75, radius, "fill='none' stroke='#fff' stroke-opacity='.9' stroke-width='1.5'") + '</g></svg>';
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
@@ -239,6 +247,13 @@ function glowDots(step: number, phase: number) {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
+function isDuoCoverPortrait() {
+  // Only the confirmed WDA point viewport selects this display. Frame geometry
+  // can suppress a stale cover viewport, but never selects a display by itself.
+  return deviceAppearance === 'duo' && viewport?.width === 466 && viewport.height === 678
+    && (!dimensions || Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01);
+}
+
 function fitFrame() {
   const size = dimensions ?? viewport ?? { width: 440, height: 956 };
   // The stage is what remains between the status pill and the toolbar.
@@ -253,12 +268,17 @@ function fitFrame() {
   device.style.width = `${outerWidth * scale}px`;
   device.style.height = `${outerHeight * scale}px`;
   device.style.setProperty('--bezel', `${inset * scale}px`);
-  const radius = deviceAppearance === 'plain' ? 0 : shortSide * .12 * scale;
+  const coverPortrait = isDuoCoverPortrait();
+  device.dataset.duoScreen = coverPortrait ? 'cover-portrait' : 'neutral';
+  // 59 pt is an Appoly simulator-art reference, not an Apple hardware specification.
+  // Other Duo viewports keep a neutral bezel until their corner direction is known.
+  const radius = coverPortrait ? 59 * size.width / 466 * scale
+    : deviceAppearance === 'plain' || deviceAppearance === 'duo' ? 0 : shortSide * .12 * scale;
   device.style.setProperty('--screen-radius', `${radius}px`);
   const band = bezel * scale * 3.8;
   for (const [phase, bridge] of [.12, .32, .62].entries()) {
     device.style.setProperty(phase === 0 ? '--glow-mask' : `--glow-mask-${phase}`,
-      glowMask(size.width * scale, size.height * scale, radius, band, bridge));
+      glowMask(size.width * scale, size.height * scale, radius, band, bridge, coverPortrait));
   }
   const dotStep = Math.max(5, bezel * scale * .95);
   for (let phase = 0; phase < 3; phase++) {
@@ -355,7 +375,7 @@ function consume(value: unknown) {
   }
   if (validSize(preview.viewport) && (viewport?.width !== preview.viewport.width || viewport?.height !== preview.viewport.height)) {
     viewport = preview.viewport;
-    if (!dimensions) fitFrame();
+    fitFrame();
   }
   if (preview.paused === true) {
     // Freeze the already displayed page underneath the handoff overlay. Invalidate
@@ -531,7 +551,11 @@ async function recoverViewport() {
     }, { timeout: ACTION_TIMEOUT });
     const data = result.structuredContent as Partial<Preview> | undefined;
     if (visible() && generation === frameGeneration && stream === streamId
-        && !result.isError && validSize(data?.viewport)) viewport = data.viewport;
+        && !result.isError && validSize(data?.viewport)
+        && (viewport?.width !== data.viewport.width || viewport?.height !== data.viewport.height)) {
+      viewport = data.viewport;
+      fitFrame();
+    }
   } catch { /* Keep input disabled until geometry can be verified by a later poll. */ }
 }
 function canPoint() {
@@ -548,6 +572,12 @@ function pointerPoint(event: MouseEvent): Point | undefined {
   const x = event.clientX - rect.left - (rect.width - width) / 2;
   const y = event.clientY - rect.top - (rect.height - height) / 2;
   if (width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height) return;
+  if (isDuoCoverPortrait()) {
+    const radius = 59 * width / viewport.width;
+    const centerY = y < radius ? radius : y > height - radius ? height - radius : undefined;
+    if (x > width - radius && centerY !== undefined
+        && Math.hypot(x - (width - radius), y - centerY) > radius) return;
+  }
   return { x: x / width * viewport.width, y: y / height * viewport.height };
 }
 function cancelPointer() {
