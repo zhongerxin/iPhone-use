@@ -16,6 +16,7 @@ type Gesture = {
 type Preview = {
   server_time: number;
   stream_id?: string;
+  discard_previous_frame?: boolean;
   frame: Frame | null;
   frame_available?: boolean;
   frame_age_ms?: number | null;
@@ -337,12 +338,12 @@ function consume(value: unknown) {
     // A replacement stream may belong to another phone; wait for its model.
     nextAppearance = 'plain';
     model.textContent = 'iPhone';
-    // Sequence numbers restart with the server, but keep the last pixels until
-    // its replacement is ready.
+    // Reconnects retain the last picture; a different phone must discard it.
     frameSeq = 0;
     eventId = 0;
     root.dataset.operating = 'false';
-    retainFrame();
+    if (preview.discard_previous_frame === true) clearFrame();
+    else retainFrame();
   }
   if (typeof preview.device?.model === 'string' && preview.device.model.trim()) {
     model.textContent = preview.device.model;

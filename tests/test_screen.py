@@ -302,7 +302,25 @@ class ScreenHubTests(unittest.TestCase):
         self.assertNotEqual(state["stream_id"], before)
         self.assertEqual((state["frame"], state["frame_available"], self.hub._seq), (None, False, 0))
         self.assertEqual(state["device"], {"model": "iPhone 17 Pro Max"})
+        self.assertFalse(state["discard_previous_frame"])
         self.assertFalse(self.hub.paused())
+
+    def test_device_change_discard_hint_survives_polls_until_next_restart(self):
+        self.assertFalse(self.hub.start()["discard_previous_frame"])
+        before = self.hub.start()["stream_id"]
+        changed = self.hub.restart(discard_previous_frame=True)
+        self.assertNotEqual(changed["stream_id"], before)
+        self.assertTrue(changed["discard_previous_frame"])
+        for _ in range(3):
+            self.assertTrue(self.hub.start()["discard_previous_frame"])
+        for _ in range(2):
+            self.assertTrue(self.hub.restart()["discard_previous_frame"])
+        # Frames arriving later must not consume the one-per-stream UI hint.
+        self.hub._publish_frame(jpeg(), 440, 956, threading.Event())
+        self.assertTrue(self.hub._wire(self.hub._read_state())["discard_previous_frame"])
+        self.hub.set_paused(True)
+        self.assertIsNone(self.hub._frame)
+        self.assertFalse(self.hub.restart()["discard_previous_frame"])
 
     def test_stream_command_uses_existing_usb_dependencies_and_no_new_install(self):
         (self.directory / "config.json").write_text(json.dumps({"udid": "TEST-DEVICE-1234", "password": "secret"}))

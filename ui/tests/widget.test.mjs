@@ -331,6 +331,41 @@ test('a reconnected server restarts acknowledgements and unavailable streams ret
   assert.equal(h.elements.app.dataset.frameSeq, '1');
 });
 
+test('switching phones discards old pixels once and ignores an older pending frame', async () => {
+  let resolve;
+  const h = await harness({ reply: () => new Promise(done => { resolve = done; }) });
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'phone-a', frame: frame(8),
+    frame_available: true, device: { model: 'iPhone 15 Pro' } }) });
+  h.elements.image.onload();
+  await h.tick();
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'phone-b', discard_previous_frame: true,
+    frame_available: false, device: { model: 'iPhone Duo' } }) });
+  assert.equal(h.elements.model.textContent, 'iPhone Duo');
+  assert.equal(h.elements.device.dataset.appearance, 'plain');
+  assert.equal(h.elements.image.src, undefined);
+  assert.equal(h.elements.image.hidden, true);
+  assert.equal(h.elements.app.dataset.frameSeq, '0');
+  resolve({ structuredContent: preview({ stream_id: 'phone-a', frame: frame(9),
+    frame_available: true, device: { model: 'iPhone 15 Pro' } }) });
+  await flush();
+  assert.equal(h.elements.image.src, undefined);
+  assert.equal(h.elements.model.textContent, 'iPhone Duo');
+  const next = { ...frame(1), data: 'new-phone-image' };
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'phone-b', discard_previous_frame: true,
+    frame: next, frame_available: true }) });
+  h.elements.image.onload();
+  const source = h.elements.image.src;
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'phone-b', discard_previous_frame: true,
+    frame_available: true }) });
+  assert.equal(h.elements.image.src, source);
+  assert.equal(h.elements.image.hidden, false);
+  assert.equal(h.elements.app.dataset.frameSeq, '1');
+  // A routine reconnect of the same phone continues to retain its picture.
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'reconnected', discard_previous_frame: false,
+    frame_available: false, device: { model: 'iPhone Duo' } }) });
+  assert.equal(h.elements.image.src, source);
+});
+
 test('failed frame calls retain the previously visible image and back off', async () => {
   const h = await harness({ reply: async () => { throw new Error('disconnected'); } });
   h.app.ontoolresult({ structuredContent: preview({ frame: frame(19), busy: true }) });
@@ -654,6 +689,30 @@ test('plain portrait and landscape screens preserve the complete frame and gestu
       viewport: { width: width / 2, height: height / 2 }, events: [
         { id: seq, kind: 'tap', at: 1000, point: { x: width / 8, y: height / 4 } },
       ] }) });
+    const displayWidth = parseFloat(h.elements.device.style.width);
+    const displayHeight = parseFloat(h.elements.device.style.height);
+    assert.ok(Math.abs(displayWidth / displayHeight - width / height) < 1e-8);
+    assert.ok(displayWidth <= h.stageSize.width && displayHeight <= h.stageSize.height);
+    assert.equal(h.elements.cursor.style.left, '25%');
+    assert.equal(h.elements.cursor.style.top, '50%');
+    assert.equal(h.elements.device.dataset.orientation, width > height ? 'landscape' : 'portrait');
+  }
+});
+
+test('iPhone Duo keeps all four inner and outer screen proportions plain and unclipped', async () => {
+  const h = await harness();
+  let seq = 0;
+  for (const [width, height] of [[669, 951], [951, 669], [466, 678], [678, 466]]) {
+    // Reproduce switching from an island phone, then unfolding/folding and rotating.
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 15 Pro' } }) });
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone Duo' },
+      frame: { ...frame(++seq), width: width * 3, height: height * 3 }, viewport: { width, height },
+      events: [{ id: seq, kind: 'tap', at: 1000, point: { x: width / 4, y: height / 2 } }] }) });
+    assert.equal(h.elements.model.textContent, 'iPhone Duo');
+    assert.equal(h.elements.device.dataset.appearance, 'plain');
+    assert.equal(h.elements.device.style['--bezel'], '0px');
+    assert.equal(h.elements.device.style['--screen-radius'], '0px');
+    assert.ok(decodeURIComponent(h.elements.device.style['--glow-mask']).includes("rx='0'"));
     const displayWidth = parseFloat(h.elements.device.style.width);
     const displayHeight = parseFloat(h.elements.device.style.height);
     assert.ok(Math.abs(displayWidth / displayHeight - width / height) < 1e-8);

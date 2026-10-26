@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import datetime as dt
 from pathlib import Path
 import signal
@@ -130,6 +131,40 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(parsed["developer_mode"], "disabled")
         self.assertEqual(parsed["pairing_state"], "unpaired")
         self.assertEqual(parsed["unlocked"], "user_check_required")
+
+    def test_devicectl_generic_duo_name_uses_only_known_product_type(self):
+        for model, product, expected in [("iPhone", "iPhone19,4", "iPhone Duo"),
+                                          (None, "iPhone19,4", "iPhone Duo"),
+                                          ("", "iPhone19,4", "iPhone Duo"),
+                                          ("iPhone 17 Pro Max", "iPhone19,4", "iPhone 17 Pro Max"),
+                                          ("iPhone", "iPhone99,1", "iPhone"),
+                                          (None, "iPhone99,1", None)]:
+            for legacy in (False, True):
+                with self.subTest(model=model, product=product, legacy=legacy):
+                    hardware = {"reality": "physical", "deviceType": "iPhone", "udid": "TEST-UDID",
+                                "marketingName": model, "productType": product}
+                    # A user-supplied device name must not determine its model.
+                    state = {"name": "iPhone Duo"}
+                    item = ({"hardwareProperties": hardware, "deviceProperties": state} if legacy else
+                            {"properties": {"hardware": hardware, "state": state}})
+                    devices = self.manager.parse_devices({"result": {"devices": [item]}})
+                    self.assertEqual(devices[0]["model"], expected)
+
+    def test_xcdevice_fallback_maps_generic_duo_model_code(self):
+        rows = [{"identifier": "DUO-UDID", "modelName": "iPhone", "modelCode": "iPhone19,4"},
+                {"identifier": "OTHER-UDID", "modelName": "iPhone 15 Pro", "modelCode": "iPhone19,4"},
+                {"identifier": "UNKNOWN-UDID", "name": "iPhone Duo", "modelName": "iPhone", "modelCode": "iPhone99,1"}]
+        for row in rows:
+            row.update(platform="com.apple.platform.iphoneos", simulator=False, available=True)
+        with patch.object(wda_setup, "_run", side_effect=[
+                {"ok": False, "stdout": "", "stderr": "CoreDevice unavailable"},
+                {"ok": True, "stdout": json.dumps(rows), "stderr": ""}]) as run:
+            result = self.manager.discover()
+        self.assertTrue(result["ok"])
+        self.assertEqual([device["model"] for device in result["devices"]],
+                         ["iPhone Duo", "iPhone 15 Pro", "iPhone"])
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[1].args[0][:3], ["xcrun", "xcdevice", "list"])
 
     def test_job_status_redacts_and_reports_actionable_signing_failure(self):
         job = self.job()

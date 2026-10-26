@@ -71,6 +71,14 @@ def _read_json(path, default=None):
         return default
 
 
+def _device_model(model, product_type):
+    # Apple's CoreSimulator device profile identifies iPhone19,4 as iPhone Duo.
+    # CoreDevice/xcdevice can still report its marketing name as only "iPhone".
+    if (not model or model == "iPhone") and product_type == "iPhone19,4":
+        return "iPhone Duo"
+    return model
+
+
 def _write_json(path, value):
     path = Path(path)
     fd, name = tempfile.mkstemp(prefix=".write-", dir=path.parent)
@@ -208,7 +216,7 @@ class SetupManager:
                 developer = "enabled" if "enabled" in developer else "disabled" if "disabled" in developer else "unknown"
             result.append({"udid": hardware.get("udid", item.get("identifier")),
                            "core_device_id": item.get("identifier"), "name": state.get("name", "iPhone"),
-                           "model": hardware.get("marketingName"), "ios_version": version,
+                           "model": _device_model(hardware.get("marketingName"), hardware.get("productType")), "ios_version": version,
                            "pairing_state": connection.get("pairingState", "unknown"),
                            "connection_state": connection.get("state", connection.get("tunnelState", "unknown")),
                            "transport": connection.get("transportType", "unknown"),
@@ -225,7 +233,7 @@ class SetupManager:
             if not probe["ok"] or not document:
                 fallback = _run(["xcrun", "xcdevice", "list", "--timeout", "5"], timeout=9)
                 try:
-                    devices = [{"udid": item["identifier"], "name": item.get("name"), "model": item.get("modelName"),
+                    devices = [{"udid": item["identifier"], "name": item.get("name"), "model": _device_model(item.get("modelName"), item.get("modelCode")),
                                 "ios_version": item.get("operatingSystemVersion"), "available": item.get("available"),
                                 "pairing_state": "unknown", "developer_mode": "unknown", "unlocked": "user_check_required"}
                                for item in json.loads(fallback["stdout"])

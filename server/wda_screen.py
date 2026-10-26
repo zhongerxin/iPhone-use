@@ -134,6 +134,7 @@ class ScreenHub:
         self._seq = 0
         self._received_at = None
         self._stream_id = uuid.uuid4().hex
+        self._discard_previous_frame = False
         self._state_cache = None
         # Marketing name of the phone for the header; never its own name or identifiers.
         self.device = None
@@ -249,6 +250,7 @@ class ScreenHub:
                 wire_frame = None
             return {"server_time": self._now(), "frame": wire_frame,
                     "stream_id": self._stream_id, "device": self.device,
+                    "discard_previous_frame": self._discard_previous_frame,
                     "frame_available": self._frame is not None and not state["paused"],
                     "frame_age_ms": max(0, int((time.monotonic()-self._received_at)*1000)) if self._received_at is not None else None,
                     "viewport": state["viewport"],
@@ -291,11 +293,15 @@ class ScreenHub:
     def paused(self):
         return self._paused()
 
-    def restart(self):
+    def restart(self, discard_previous_frame=False):
         """Drop the stream and its last frame; the next visible poll reconnects as a new stream."""
-        self.close()
         with self._lock:
+            # A second refresh before the new phone produces a frame must not cancel its hint.
+            discard_previous_frame = discard_previous_frame or (self._discard_previous_frame and self._seq == 0)
+            self.close()
             self._stream_id = uuid.uuid4().hex
+            # Keep this hint for the entire stream so a missed response cannot retain another phone.
+            self._discard_previous_frame = discard_previous_frame
             self._seq = 0
         return self._wire(self._read_state(), include_frame=False)
 

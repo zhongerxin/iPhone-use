@@ -19,7 +19,7 @@ import threading
 import time
 from wda_client import WDAClient, WDAError
 from wda_controller import CALL_BUDGET, DEFAULT_MAX_NODES, PhoneController, TYPING_FREQUENCY
-from wda_setup import SetupManager, state_directory
+from wda_setup import SetupManager, state_directory, _write_json
 from wda_apps import AppCatalog
 from wda_screen import ScreenHub
 import wda_image
@@ -296,6 +296,10 @@ class Runtime:
         self.responses=collections.deque(maxlen=500)
         self._replied_at=None
         self._device_lookup=None
+        self._device_lock=threading.Lock()
+        self._device_udid=None
+        self._device_retry_at=0
+        self._device_retry_delay=5
         self.analytics=Analytics(self.state_dir,VERSION)
 
     def call(self,name,args):
@@ -318,10 +322,10 @@ class Runtime:
         # sharing this runtime, and share only this plugin's session identity.
         if not isinstance(name,str) or not name.startswith("pua_") or name[4:] not in SCHEMAS:raise WDAError("unknown_tool","Unknown PUA tool.")
         validate(args,SCHEMAS[name[4:]]);validate_semantics(name[4:],args)
-        if name in ("pua_screen","pua_screen_frame","pua_screen_action"):self.identify_device()
+        preview_restarted=self.identify_device() if name in ("pua_screen","pua_screen_frame","pua_screen_action") else False
         # Cached preview polling does not share the PUA action/session lock.
         if name=="pua_screen_frame":return self.screen.frame(**args)
-        if name=="pua_screen_action" and args["action"] not in ("tap","drag","viewport"):return self.screen_action(args["action"])
+        if name=="pua_screen_action" and args["action"] not in ("tap","drag","viewport"):return self.screen_action(args["action"],preview_restarted)
         if name=="pua_screen":
             action=args.get("action","open")
             if action=="pause":self.screen.set_paused(True)
@@ -371,29 +375,56 @@ class Runtime:
             if task_temp.exists():task_temp.unlink()
 
     def identify_device(self):
-        """Find the phone's model name for the preview header once, away from the request path."""
-        if self._device_lookup is not None:return
+        """Refresh model metadata when the configured phone changes, without phone actions."""
+        def configured_udid():
+            config=self.setup_manager.config
+            udid=config.get("udid") if isinstance(config,dict) else None
+            return udid if isinstance(udid,str) and udid else None
         def lookup():
-            udid=self.setup_manager.config.get("udid")
-            # Nothing is configured yet: there is no phone to name, and nothing to look up.
-            if not isinstance(udid,str) or not udid:return
             cache=self.state_dir/"device.json"
+            model=None
             try:
                 known=json.loads(cache.read_text())
-                if known.get("udid")==udid and isinstance(known.get("model"),str):
-                    self.screen.device={"model":known["model"][:60]};return
+                if known.get("udid")==udid and isinstance(known.get("model"),str):model=known["model"].strip()
             except (OSError,ValueError,AttributeError):pass
+            # Old caches may contain only the generic name, before hardware-ID fallbacks existed.
+            cached=bool(model and model.lower() not in ("iphone","ipad"))
             try:
-                model=next((d.get("model") for d in self.setup_manager.discover().get("devices",[]) if udid and d.get("udid")==udid),None)
-                if isinstance(model,str) and model:
-                    self.screen.device={"model":model[:60]}
-                    fd=os.open(cache,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
-                    with os.fdopen(fd,"w") as stream:json.dump({"udid":udid,"model":model},stream)
+                if not cached:
+                    model=next((d.get("model") for d in self.setup_manager.discover().get("devices",[]) if d.get("udid")==udid),None)
             except Exception:
-                # The header falls back to a generic name; the preview must never fail over a label.
-                pass
-        self._device_lookup=threading.Thread(target=lookup,name="wda-device-model",daemon=True)
-        self._device_lookup.start()
+                model=None
+            with self._device_lock:
+                # The thread is a generation token, including an A -> B -> A switch.
+                if self._device_lookup is not threading.current_thread() or configured_udid()!=udid:return
+                if isinstance(model,str) and model.strip():
+                    self.screen.device={"model":model.strip()[:60]}
+                    self._device_retry_at=float("inf")
+                    if not cached:
+                        try:_write_json(cache,{"udid":udid,"model":model.strip()})
+                        except OSError:pass
+                else:
+                    self._device_retry_at=time.monotonic()+self._device_retry_delay
+                    self._device_retry_delay=min(60,self._device_retry_delay*2)
+        with self._device_lock:
+            udid=configured_udid()
+            restarted=False
+            if udid!=self._device_udid:
+                previous_udid=self._device_udid
+                self._device_udid=udid
+                self._device_lookup=None
+                self._device_retry_at=0
+                self._device_retry_delay=5
+                # A missing model would preserve the previous phone's decoration in the widget.
+                self.screen.device={"model":"iPhone"}
+                # The existing preview connection still belongs to the previous phone.
+                if previous_udid is not None:
+                    self.screen.restart(discard_previous_frame=True)
+                    restarted=True
+            if not udid or (self._device_lookup is not None and self._device_lookup.is_alive()) or time.monotonic()<self._device_retry_at:return restarted
+            self._device_lookup=threading.Thread(target=lookup,name="wda-device-model",daemon=True)
+            self._device_lookup.start()
+            return restarted
 
     def screen_gesture(self,args):
         """App-only pointer input and geometry recovery, under the shared operation lock and session."""
@@ -431,11 +462,12 @@ class Runtime:
             self.phone.external_action()
             self.screen.end(token)
 
-    def screen_action(self,action):
+    def screen_action(self,action,preview_restarted=False):
         """Toolbar of the preview App: the user's own click, outside the model's tool sequence."""
         if action=="refresh":
             pause_id=self.screen.reconnect_pause_id()
-            state=self.screen.restart()
+            # A target change already restarted with the discard-old-phone hint.
+            state=self.screen.start() if preview_restarted else self.screen.restart()
             probe=WDAClient(self.base_url,timeout=2)
             try:
                 ready=(probe.request("GET","/status").get("value") or {}).get("ready") is True

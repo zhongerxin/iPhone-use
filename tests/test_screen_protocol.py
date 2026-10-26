@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "server"))
 from iphone_use import Runtime, SCREEN_URI, serve
 from wda_client import WDAError
 from wda_controller import PhoneController
+from wda_screen import ScreenHub
 from test_controller import FakeWDA
 
 
@@ -62,8 +63,8 @@ class MockScreen:
     def paused(self):
         return self.is_paused
 
-    def restart(self):
-        self.events.append(("restart", {}))
+    def restart(self, discard_previous_frame=False):
+        self.events.append(("restart", {"discard_previous_frame": discard_previous_frame}))
         return {"frame": None, "events": [], "busy": False, "paused": self.is_paused, "stream_id": "restarted"}
 
     def set_viewport(self, viewport):
@@ -575,9 +576,257 @@ class ScreenProtocolTests(unittest.TestCase):
         runtime, client, screen = self.runtime()
         with patch.object(runtime.setup_manager, "discover") as discover:
             runtime.call("pua_screen_frame", {})
-            runtime._device_lookup.join(timeout=5)
+            self.assertIsNone(runtime._device_lookup)
         discover.assert_not_called()
         self.assertIsNone(screen.device)
+
+    def configure_preview_device(self, udid):
+        (Path(self.directory.name) / "config.json").write_text(json.dumps({"udid": udid}))
+
+    def finish_device_lookup(self, runtime):
+        thread = runtime._device_lookup
+        self.assertIsNotNone(thread)
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+    def test_changed_phone_clears_previous_model_before_discovery_finishes(self):
+        runtime, client, screen = self.runtime()
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.configure_preview_device("DEVICE-A")
+        with patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-A", "name": "Private A", "model": "iPhone 17 Pro Max"}]}):
+            runtime.call("pua_screen", {})
+            self.finish_device_lookup(runtime)
+        self.assertEqual(screen.device, {"model": "iPhone 17 Pro Max"})
+
+        def discover_b():
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("lookup was not released")
+            return {"devices": [{"udid": "DEVICE-B", "name": "Private B", "model": "iPhone Duo"}]}
+
+        self.configure_preview_device("DEVICE-B")
+        with patch.object(runtime.setup_manager, "discover", side_effect=discover_b) as discover:
+            runtime.call("pua_screen_frame", {})
+            self.assertTrue(started.wait(5))
+            self.assertEqual(screen.device, {"model": "iPhone"})
+            for _ in range(10):
+                runtime.call("pua_screen_frame", {})
+            discover.assert_called_once_with()
+            release.set()
+            self.finish_device_lookup(runtime)
+        self.assertEqual(screen.device, {"model": "iPhone Duo"})
+        self.assertEqual(client.calls, [])
+        self.assertEqual(sum(kind == "restart" for kind, _ in screen.events), 1)
+        self.assertIn(("restart", {"discard_previous_frame": True}), screen.events)
+        self.assertEqual(json.loads((Path(self.directory.name) / "device.json").read_text()),
+                         {"udid": "DEVICE-B", "model": "iPhone Duo"})
+
+    def test_changed_phone_invalidates_old_preview_pixels_without_phone_actions(self):
+        runtime, client, _ = self.runtime()
+        screen = ScreenHub(self.directory.name)
+        runtime.screen = screen
+        runtime.phone.screen = screen
+        self.configure_preview_device("DEVICE-A")
+        with patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-A", "model": "iPhone 15"}]}) as discover:
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+            old_stop = screen._stop
+            screen._publish_frame(b"old phone image", 400, 800, old_stop)
+            old_stream = screen.start()["stream_id"]
+            self.assertTrue(screen.start()["frame_available"])
+            runtime.identify_device()
+            self.assertEqual(screen.start()["stream_id"], old_stream)
+            self.assertTrue(screen.start()["frame_available"])
+            discover.assert_called_once_with()
+        self.configure_preview_device("DEVICE-B")
+        with patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-B", "model": "iPhone Duo"}]}):
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+        current = screen.start()
+        self.assertNotEqual(current["stream_id"], old_stream)
+        self.assertTrue(current["discard_previous_frame"])
+        self.assertTrue(old_stop.is_set())
+        self.assertFalse(current["frame_available"])
+        screen._publish_frame(b"late old phone image", 400, 800, old_stop)
+        self.assertFalse(screen.start()["frame_available"])
+        self.assertEqual(current["device"], {"model": "iPhone Duo"})
+        self.assertEqual(client.calls, [])
+
+    def test_toolbar_refresh_does_not_erase_device_change_discard_hint(self):
+        runtime, client, _ = self.runtime()
+        screen = ScreenHub(self.directory.name)
+        runtime.screen = screen
+        runtime.phone.screen = screen
+        phone = self.toolbar(runtime)
+        self.configure_preview_device("DEVICE-A")
+        with patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-A", "model": "iPhone 15"}]}):
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+        self.configure_preview_device("DEVICE-B")
+        with patch.object(screen, "restart", wraps=screen.restart) as restart, \
+             patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-B", "model": "iPhone Duo"}]}):
+            result = runtime.call("pua_screen_action", {"action": "refresh"})
+            self.finish_device_lookup(runtime)
+            restart.assert_called_once_with(discard_previous_frame=True)
+            repeated = runtime.call("pua_screen_action", {"action": "refresh"})
+            self.assertEqual(restart.call_count, 2)
+        self.assertTrue(result["discard_previous_frame"])
+        self.assertTrue(repeated["discard_previous_frame"])
+        self.assertTrue(screen.start()["discard_previous_frame"])
+        self.assertEqual(phone.actions(), [])
+        self.assertEqual(client.calls, [])
+
+    def test_phone_can_be_configured_removed_and_configured_again(self):
+        runtime, client, screen = self.runtime()
+        with patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-A", "model": "iPhone 15"}]}) as discover:
+            runtime.identify_device()
+            discover.assert_not_called()
+            self.configure_preview_device("DEVICE-A")
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+            self.assertEqual(screen.device, {"model": "iPhone 15"})
+            (Path(self.directory.name) / "config.json").unlink()
+            runtime.identify_device()
+            self.assertEqual(screen.device, {"model": "iPhone"})
+            self.assertIsNone(runtime._device_lookup)
+            self.configure_preview_device("DEVICE-A")
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+            self.assertEqual(screen.device, {"model": "iPhone 15"})
+        discover.assert_called_once_with()
+
+    def test_late_old_lookup_cannot_overwrite_new_phone_or_its_cache(self):
+        runtime, client, screen = self.runtime()
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.configure_preview_device("DEVICE-A")
+
+        def discover():
+            if not started.is_set():
+                started.set()
+                if not release.wait(5):
+                    raise AssertionError("lookup was not released")
+                return {"devices": [{"udid": "DEVICE-A", "model": "iPhone 15"}]}
+            return {"devices": [{"udid": "DEVICE-B", "model": "iPhone Duo"}]}
+
+        with patch.object(runtime.setup_manager, "discover", side_effect=discover) as discovery:
+            runtime.identify_device()
+            old = runtime._device_lookup
+            self.assertTrue(started.wait(5))
+            self.configure_preview_device("DEVICE-B")
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+            cache = Path(self.directory.name) / "device.json"
+            before = cache.read_bytes()
+            release.set()
+            old.join(timeout=5)
+            self.assertFalse(old.is_alive())
+        self.assertEqual(discovery.call_count, 2)
+        self.assertEqual(screen.device, {"model": "iPhone Duo"})
+        self.assertEqual(cache.read_bytes(), before)
+        self.assertEqual(json.loads(before), {"udid": "DEVICE-B", "model": "iPhone Duo"})
+
+    def test_lookup_rechecks_config_even_before_next_preview_poll(self):
+        runtime, client, screen = self.runtime()
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.configure_preview_device("DEVICE-A")
+
+        def discover():
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("lookup was not released")
+            return {"devices": [{"udid": "DEVICE-A", "model": "iPhone 15"}]}
+
+        with patch.object(runtime.setup_manager, "discover", side_effect=discover):
+            runtime.identify_device()
+            self.assertTrue(started.wait(5))
+            self.configure_preview_device("DEVICE-B")
+            release.set()
+            self.finish_device_lookup(runtime)
+        self.assertEqual(screen.device, {"model": "iPhone"})
+        self.assertFalse((Path(self.directory.name) / "device.json").exists())
+
+    def test_returning_to_same_udid_does_not_accept_its_older_lookup(self):
+        runtime, client, screen = self.runtime()
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.configure_preview_device("DEVICE-A")
+
+        def old_discover():
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("lookup was not released")
+            return {"devices": [{"udid": "DEVICE-A", "model": "iPhone 15"}]}
+
+        with patch.object(runtime.setup_manager, "discover", side_effect=old_discover):
+            runtime.identify_device()
+            old = runtime._device_lookup
+            self.assertTrue(started.wait(5))
+            (Path(self.directory.name) / "config.json").unlink()
+            runtime.identify_device()
+            self.configure_preview_device("DEVICE-A")
+            with patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                    {"udid": "DEVICE-A", "model": "iPhone Duo"}]}):
+                runtime.identify_device()
+                self.finish_device_lookup(runtime)
+            before = (Path(self.directory.name) / "device.json").read_bytes()
+            release.set()
+            old.join(timeout=5)
+            self.assertFalse(old.is_alive())
+        self.assertEqual(screen.device, {"model": "iPhone Duo"})
+        self.assertEqual((Path(self.directory.name) / "device.json").read_bytes(), before)
+
+    def test_failed_lookup_retries_with_capped_backoff_then_stays_cached(self):
+        runtime, client, screen = self.runtime()
+        self.configure_preview_device("DEVICE-A")
+        now = [100.0]
+        failures = [RuntimeError("disconnected"), {"devices": []}] * 3
+        found = {"devices": [{"udid": "DEVICE-A", "model": "iPhone Duo"}]}
+        with patch("iphone_use.time.monotonic", side_effect=lambda: now[0]), \
+             patch.object(runtime.setup_manager, "discover", side_effect=[*failures, found]) as discover:
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+            for calls, delay in enumerate([5, 10, 20, 40, 60, 60], start=1):
+                self.assertEqual(screen.device, {"model": "iPhone"})
+                now[0] += delay - 0.1
+                for _ in range(10):
+                    runtime.identify_device()
+                self.assertEqual(discover.call_count, calls)
+                now[0] += 0.1
+                runtime.identify_device()
+                self.finish_device_lookup(runtime)
+                self.assertEqual(discover.call_count, calls + 1)
+            now[0] += 100000
+            runtime.identify_device()
+            self.assertEqual(discover.call_count, 7)
+        self.assertEqual(screen.device, {"model": "iPhone Duo"})
+
+    def test_generic_cache_is_refreshed_and_replaced_privately(self):
+        runtime, client, screen = self.runtime()
+        self.configure_preview_device("DEVICE-A")
+        cache = Path(self.directory.name) / "device.json"
+        old = json.dumps({"udid": "DEVICE-A", "model": "iPhone"})
+        cache.write_text(old)
+        cache.chmod(0o644)
+        with cache.open() as previous, patch.object(runtime.setup_manager, "discover", return_value={"devices": [
+                {"udid": "DEVICE-A", "name": "Private Name", "model": "iPhone Duo"}]}) as discover:
+            runtime.identify_device()
+            self.finish_device_lookup(runtime)
+            # An open reader retains the old complete JSON: the cache was atomically replaced.
+            self.assertEqual(previous.read(), old)
+        discover.assert_called_once_with()
+        self.assertEqual(screen.device, {"model": "iPhone Duo"})
+        self.assertEqual(json.loads(cache.read_text()), {"udid": "DEVICE-A", "model": "iPhone Duo"})
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(list(cache.parent.glob(".write-*")), [])
 
     def test_runtime_close_releases_preview_and_transport(self):
         runtime, client, screen = self.runtime()
