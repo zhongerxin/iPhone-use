@@ -2,12 +2,14 @@
 
 优先调用封装好的工具，默认乐观执行常规动作，下一步需要信息时顺带判断上一动作。工具绑定缺失、宿主转发错误或已确认的封装问题不等于 PUA 不可用；可对同一已授权动作使用插件代码入口。代码回退保留相同的配置、会话、操作锁和明确异常处理，不新增每步验收。
 
-普通版提供 18 个模型工具；先查看本回合实际可调用的工具绑定（支持时用 ALL_TOOLS 或工具搜索），不能只从 tools/list、文档或先前聊天推断已经绑定。0.1.6 的 install.sh 同时注册同名标准 MCP，避免 Codex 插件共享说明预算隐藏工具，并保留完整 batch schema。新版安装后重新连接聊天；实际仍缺少所需工具时才用下面的代码入口继续，不默认把已封装操作都改成 CLI。
+普通版提供 19 个模型工具；先查看本回合实际可调用的工具绑定（支持时用 ALL_TOOLS 或工具搜索），不能只从 tools/list、文档或先前聊天推断已经绑定。0.1.6 的 install.sh 同时注册同名标准 MCP，避免 Codex 插件共享说明预算隐藏工具，并保留完整 batch schema。新版安装后重新连接聊天；实际仍缺少所需工具时才用下面的代码入口继续，不默认把已封装操作都改成 CLI。
 
 ## 先区分错误
 
 - schema / 参数错误：按 argument_path、unknown_fields、allowed_fields 修正一次调用。action_executed=false 表示动作未发出，MCP 绑定仍不可用时可用代码入口；不要自动忽略未知参数。
 - `device_busy`：另一操作持有共享锁，等待它结束，不另建 Runtime 配置或 state directory 绕过锁。
+- `device_queued` / `device_held`：另一个对话持有这台手机的控制权，没有执行任何动作。告诉用户 `holder.label` 是谁、`position` 排第几；在 `keep_place_seconds` 内再调用任意手机工具保留位置，`pua_device(action="release")` 退出队列。不要换目录、端口或并行控制同一手机。
+- `fresh_observation_required`：控制权刚换到本对话，先 `pua_ready` / `pua_observe` / `pua_find` 看当前页面，再决定动作，不重放原动作。
 - `stale_observation`：提供的 ID 不属于当前 Runtime，或 App / 视口上下文已改变。用下一步所需的新信息定位，不为整图哈希、文本数字刷新或固定 30 秒期限增加读图；ID 是可选上下文，不是每个坐标动作的必填许可。
 - 界面异常统一先看截图：selector / 焦点失败、滚动后找不到可点击目标、无进展、区域被挡、滚动上下文改变、输入不符或预期页面未出现。先查看结果里已附截图，缺图才补一次 screenshot，再选择可见目标、处理浮层或决定是否继续滚动；不先重读树、换标签或原样重试。`tap_point` / candidates 不证明未被遮挡；输入先点可见输入框再 type_text，焦点仍失败须重新选点。叠在同一位置或只有一个在屏幕内的匹配由工具自行确定。
 - `input_continuation_expired`：长文本续传已失效，本次没有输入任何内容。读取字段实际文字，用 `replace=false` 只补缺少的部分。
@@ -46,7 +48,13 @@ READY 的 `pua_timeout` 不进入重启流程：按 `retry_after_seconds` 在宿
 python3 <PLUGIN_ROOT>/scripts/phone.py pua_press_button '{"name":"home","observe":"none","verify":false}'
 ```
 
-脚本使用默认 `~/.local/share/iphone-use` 的共享会话与操作锁，返回结构化结果。下一步需要未知页面信息时在本次动作显式选择 observe；需要关键验收时显式 verify=true。命令输出只有 JSON：截图位于 `image.path`（已缩放的 JPEG，同名 `.png` 是原始截图），需要查看时用可用的图片工具打开，像素乘以 `image.pixel_to_point` 得到 iPhone 点。
+脚本使用默认 `~/.local/share/iphone-use` 的共享会话、操作锁和设备控制权，返回结构化结果。每次单独运行都是一个新进程，等于一次换手：读取类调用照常，动作类调用会先返回 `fresh_observation_required`。要连续执行多个动作时改用持久模式，一个进程替整个对话保留控制权，协议与 MCP 相同（stdin/stdout 每行一条 JSON-RPC）：
+
+```sh
+python3 <PLUGIN_ROOT>/scripts/phone.py --session
+```
+
+关闭 stdin 即结束会话并归还手机。下一步需要未知页面信息时在本次动作显式选择 observe；需要关键验收时显式 verify=true。命令输出只有 JSON：截图位于 `image.path`（已缩放的 JPEG，同名 `.png` 是原始截图），需要查看时用可用的图片工具打开，像素乘以 `image.pixel_to_point` 得到 iPhone 点。
 
 只有原通道确实使用非默认目录 / URL 才传匹配的 --state-dir / --url；不得为避开 busy 换目录或并行控制同一手机。
 

@@ -2,6 +2,7 @@
 """Dependency-free local MCP stdio entrypoint for iPhone Use."""
 import argparse
 import base64
+import contextlib
 import collections
 import fcntl
 import inspect
@@ -24,6 +25,8 @@ from wda_apps import AppCatalog
 from wda_screen import ScreenHub
 import wda_image
 from analytics import Analytics
+from device_lease import DeviceLease, LeaseError
+from lease_policy import OBSERVING_TOOLS, TRANSPORT, is_mutation, lease_directory, needs_lease, message as lease_message
 
 PUAError=WDAError
 VERSION="0.3.16"
@@ -88,6 +91,7 @@ SCHEMAS={
  "collect_list":obj({"row_type":string(),"max_pages":num(1,10,"integer"),"end_selector":SEL}),
  "apps":obj({"query":string(max_length=100),"country":string(max_length=2),"source":string(enum=["auto","catalog","installed","apple"]),"limit":num(1,30,"integer")},("query",)),
  "doctor":obj({}),"ready":obj({"screenshot":{"type":"boolean","default":True,"description":"Also verify screenshot; false retains status/session/source/viewport/unlock checks."},"recover":{"type":"boolean","default":True,"description":"Normal task startup: omit or set true, so a persistent local.pid/XCTest fault can queue one bounded restart of a proven owned PUA. Use false only for an explicitly requested diagnostic/no-restart check, not a routine precheck. False is respected and returns ready=false, state=recovery_required when restart is needed; queued recovery returns state=recovering. Neither state proves readiness."}}),"metrics":obj({"reset":{"type":"boolean","default":False,"description":"Return the totals, then start a new measurement window."}}),
+ "device":obj({"action":string(enum=["status","claim","release"]),"label":string("Task label other chats see.",max_length=60),"quiet":{"type":"boolean","description":"Reply {} only; for hooks."}},("action",)),
  "setup":obj({"action":string(enum=["discover","fetch","configure","build","start","stop","status"]),"udid":string(),"team_id":string(),"bundle_id":string(),"source_dir":string(max_length=4096),"local_port":num(1024,65535,"integer"),"device_port":num(1024,65535,"integer"),"job_id":string(),"wait_seconds":{**num(0,30),"description":"Bounded wait for this job: start defaults to 20 seconds, status to 0. Use status with job_id and 20 to await an active start/recovery. Timeout keeps the job running; do not start again."}},("action",))
 }
 # Each batch operation carries the same closed argument schema as its standalone tool.
@@ -119,10 +123,11 @@ DESCRIPTIONS={
  "batch":"Up to 20 known steps in one model round trip. Routine unverified actions continue optimistically with intermediate observe=none. Stops on actual error, failed explicit check, uncertainty, submission without an explicit result expectation, unfinished long input (input_continues) or the per-call time budget (time_budget); continue from stopped_at without repeating completed steps. Observe the last step when the next decision needs page context.",
  "scroll_find":"Find a hittable target with at most one swipe. Ambiguity/occlusion stops immediately; an unresolved post-scroll query returns a screenshot. Inspect the end, region and overlays before deciding whether to swipe again; do not blindly repeat or raise the budget.",
  "collect_list":"Collect/deduplicate accessibility rows over bounded pages. Returns evidence and explicit coverage limits; always requires reconciliation before declaring business completeness.",
+ "device":"Shared-iPhone lease across chats: status (holder, label, queue), claim (take control now, label this task), release (hand back or leave the queue). Never touches the phone.",
  "metrics":"In-process totals without text, app data or images: PUA HTTP time and bytes, tool time, response bytes per tool, and the wait between each response and the next tool request (host, model and user time). reset=true starts a new window."
 }
 DESCRIPTIONS["apps"]="Resolve a real bundle ID by installed-device inventory, bundled verified aliases, or Apple's Search API. Query app name before launch instead of guessing. Store metadata does not prove installation; check installed_verified and publisher/country."
-READS={"doctor","observe","find","wait","metrics","apps"}
+READS={"doctor","observe","find","wait","metrics","apps","device"}
 READS.update(("screen","screen_frame"))
 DESCRIPTIONS["screen"]="Open or reuse the live iPhone screen in the Codex side panel. No phone actions or UI controls. Pause the preview before password/Face ID user takeover; resume after explicit completion. READY also opens or reuses this view by default."
 DESCRIPTIONS["screen_frame"]="App-only cached live preview and action cursor events. Never reads XML, starts sessions or occupies the phone operation lock."
@@ -297,6 +302,8 @@ class Runtime:
         self._replied_at=None
         self._device_lookup=None
         self.analytics=Analytics(self.state_dir,VERSION)
+        # One lease per physical device, shared by every Runtime of this process.
+        self.lease=DeviceLease.get(lease_directory(self.state_dir),transport=TRANSPORT)
 
     def call(self,name,args):
         started=time.monotonic();data=None;error=None
@@ -321,14 +328,60 @@ class Runtime:
         if name in ("pua_screen","pua_screen_frame","pua_screen_action"):self.identify_device()
         # Cached preview polling does not share the PUA action/session lock.
         if name=="pua_screen_frame":return self.screen.frame(**args)
-        if name=="pua_screen_action" and args["action"] not in ("tap","drag","viewport"):return self.screen_action(args["action"])
+        if name=="pua_screen_action" and args["action"] not in ("tap","drag","viewport"):
+            if args["action"]=="refresh":return self.screen_action(args["action"])
+            # The toolbar's Home and screenshot act on the shared phone: only while no other chat holds it.
+            with self.leased(name,args,wait_seconds=0):return self.screen_action(args["action"])
         if name=="pua_screen":
             action=args.get("action","open")
             if action=="pause":self.screen.set_paused(True)
             elif action=="resume":self.screen.set_paused(False)
             return self.screen.start()
+        if name=="pua_device":return self.device(args)
         lock_path=self.state_dir/"operation.lock"
         cache_path=self.state_dir/"session.json"
+        # The per-device lease orders whole work segments across chats; the operation
+        # lock below still serializes single calls, including the gesture thread.
+        with self.leased(name,args,wait_seconds=0 if name=="pua_screen_action" else None):
+            data=self._operate(name,args,lock_path,cache_path)
+        self._after_operation(name,args,data)
+        return data
+
+    @contextlib.contextmanager
+    def leased(self,name,args,wait_seconds=None):
+        """Hold this process's device lease around one call; queue errors become tool errors."""
+        if not needs_lease(name,args):
+            yield;return
+        try:
+            with self.lease.hold(name,mutation=is_mutation(name,args),wait_seconds=wait_seconds):
+                if name=="pua_launch_app":self.lease.set_auto_label(args.get("bundle_id"))
+                yield
+        except LeaseError as exc:
+            raise WDAError(exc.code,lease_message(exc),details=exc.details) from None
+
+    def _after_operation(self,name,args,data):
+        if not isinstance(data,dict):return
+        if name in OBSERVING_TOOLS and (name!="pua_ready" or data.get("ready") is True):
+            app=data.get("app") or (data.get("observation") or {}).get("app")
+            self.lease.observed(app if isinstance(app,str) else None)
+        if needs_lease(name,args):
+            note=self.lease.coordination()
+            if note:data["coordination"]=note
+
+    def device(self,args):
+        """Who holds the shared iPhone, claim it with a task label, or hand it back.
+
+        quiet=true still performs the action but replies {}: a Codex Stop hook that calls
+        pua_device must print nothing or valid hook JSON, otherwise Codex marks it Failed."""
+        try:
+            if args["action"]=="status":result=self.lease.status()
+            elif args["action"]=="claim":result=self.lease.claim(args.get("label"),args.get("wait_seconds"))
+            else:result={"released":self.lease.release("explicit"),**self.lease.status()}
+        except LeaseError as exc:
+            raise WDAError(exc.code,lease_message(exc),details=exc.details) from None
+        return {} if args.get("quiet") else result
+
+    def _operate(self,name,args,lock_path,cache_path):
         with lock_path.open("a") as lock:
             lock_path.chmod(0o600)
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -643,7 +696,9 @@ class Runtime:
 
     def close(self):
         try:self.screen.close();self.client.close()
-        finally:self.analytics.close()
+        finally:
+            try:self.analytics.close()
+            finally:self.lease.close()
 
 
 def result_content(data,structured=False):
@@ -694,7 +749,8 @@ INSTRUCTIONS=(
  "Chain known steps in batch; do not batch speculative repeated swipes toward an unknown target. Inspect the next page first, using a screenshot when tree truncation hides the boundary. explicit expect/verify opts into checking key outcomes. Send long text whole: when type_text returns input_complete=false, call it again with only continue_token; a batch stopped by input_continues or time_budget continues from stopped_at. "
  "Verify final critical results before reporting completion. Retry or replan only after observing a definite failure; never replay uncertain input/submission or an already executed multi-step operation wholesale. No_scroll_progress from explicit verification does not prove empty/complete data. "
  "For App passwords or Face ID call pua_screen(action=pause); phone_locked already auto-pauses the preview for device unlock, so do not overwrite that reason with an extra pause. Pause phone calls and use the available host question tool (request_user_input_async in Default), first option exactly 已完成继续. Wait for the actual user answer; async return or preselection is not confirmation. After the actual user completion answer, explicitly pua_screen(action=resume) for App authentication or legacy/unknown pause, then read fresh state. For device unlock run READY once; successful READY clears only its matching device_locked pause. READY/open never clear App authentication or unknown pause. Continue remaining work from that fresh state. "
- "Operation action_complete/verified fields do not mean the user's entire task is complete. Track all deliverables, give commentary progress and continue tools while work remains; final only after completion or a concrete blocker. For an unavailable MCP binding use the skill's direct Runtime fallback with the same operation lock."
+ "Operation action_complete/verified fields do not mean the user's entire task is complete. Track all deliverables, give commentary progress and continue tools while work remains; final only after completion or a concrete blocker. For an unavailable MCP binding use the skill's direct Runtime fallback with the same operation lock. "
+ "Several chats may share this iPhone. Phone tools queue in FIFO order by themselves and this chat keeps control while it keeps calling; 60 seconds without a phone call, pua_device(action=release) or the end of the chat hands the phone over. device_queued means another chat holds it: tell the user who (holder.label) and the queue position, then call a phone tool again within keep_place_seconds to keep the place or pua_device(action=release) to leave the queue; never work around the queue with another state directory. After a handover fresh_observation_required blocks actions until a fresh pua_ready/pua_observe/pua_find. pua_device(action=claim, label=short task) may announce this chat's task up front; pua_device(action=status) shows the holder and queue."
 )
 
 

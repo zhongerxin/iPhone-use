@@ -9,7 +9,7 @@ import sys
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-FILES=('plugin.json','mcp.json','.mcp.json','.codex-plugin/plugin.json','.agents/plugins/marketplace.json','README.md','README.en.md','ANALYTICS.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md','ui/package.json','ui/package-lock.json','ui/build.mjs','ui/src/app.ts','ui/index.html','ui/style.css','ui/tsconfig.json','ui/tests/widget.test.mjs')
+FILES=('plugin.json','mcp.json','.mcp.json','.codex-plugin/plugin.json','.agents/plugins/marketplace.json','README.md','DEVICE_LEASE.md','README.en.md','ANALYTICS.md','CHANGELOG.md','LICENSE','THIRD_PARTY_NOTICES.md','ui/package.json','ui/package-lock.json','ui/build.mjs','ui/src/app.ts','ui/index.html','ui/style.css','ui/tsconfig.json','ui/tests/widget.test.mjs')
 DIRS=('assets','server','skills')
 INSTALL_SCRIPTS=('phone.py','wda.sh','update_app_catalog.py','check_screen_ui.py','package.py','install.sh','register_mcp.py')
 SOURCE_DIRS=('scripts','tests','.github')
@@ -54,8 +54,8 @@ def validate():
     assert (ROOT/'tooling/package-lock.json').is_file()
     sys.path.insert(0,str(ROOT/'server'))
     from iphone_use import TOOLS,SCHEMAS,VERSION,SCREEN_URI
-    assert VERSION==manifest['version'] and len(TOOLS)==20
-    assert sum(t.get('_meta',{}).get('ui',{}).get('visibility')!=['app'] for t in TOOLS)==18
+    assert VERSION==manifest['version'] and len(TOOLS)==21
+    assert sum(t.get('_meta',{}).get('ui',{}).get('visibility')!=['app'] for t in TOOLS)==19
     assert (ROOT/'assets/phone-screen.html').is_file()
     assert next(t for t in TOOLS if t['name']=='pua_ready')['_meta']['ui']['resourceUri']==SCREEN_URI
     assert len(set(t['name'] for t in TOOLS))==len(TOOLS)
@@ -67,7 +67,7 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--validate-only',action='store_true');parser.add_argument('--stage-only',action='store_true');args=parser.parse_args()
     manifest=validate()
     if args.validate_only:
-        print('Plugin manifests, 2 skills, 18 model tools and 2 app-only preview tools validated.');return
+        print('Plugin manifests, 2 skills, 19 model tools and 2 app-only preview tools validated.');return
     stage=ROOT/'dist'/manifest['name']
     if stage.exists():shutil.rmtree(stage)
     stage.mkdir(parents=True)
