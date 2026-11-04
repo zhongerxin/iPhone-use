@@ -1,5 +1,12 @@
 # 更新记录
 
+## Unreleased
+
+- 修复无 selector 输入（坐标点击聚焦后 `pua_type_text`）在键盘收起或弹窗随键盘上移后回读失败：`/element/active` 返回的元素 ID 在 WDA 中按 `hasKeyboardFocus == 1` 解析，焦点一变就报 stale element reference。回读遇到 stale 时按输入框类型重新查找，同一 ID 改绑到不依赖焦点的查询后再读；仍找不到时返回 `input_unverified`（文字已发送、无法回读），不再透出 WDA 原始 stale 错误。
+- 清空前焦点已丢失时返回 `no_focused_field`（未输入任何内容），并附截图与坐标重选指引。
+- `verify=true` 回读到的文字比预期少、且只由已发送的字符组成（丢字或乱序，如 `1565229` 只剩 `15`、追加变成 `6515`、或完全未收到）时，返回新错误码 `keyboard_input_unreliable`，带 `reason`、长度和 `keyboard_keys_exposed`（App 树中可见的系统键盘按键数），并提示切换系统键盘或按截图逐键点击；应用格式化等其他差异仍为 `input_mismatch`。
+- 两个新错误码加入匿名统计枚举；skill 补充对应处理说明。
+
 ## 0.3.16 — 2026-10-22
 
 - 增加显式 App 启动埋点，同步发送到 PostHog 和 GA4，记录校验后的 bundle ID、公开目录名称、单次 / batch 来源和前台核验状态；batch 仅统计已成功返回的启动子步骤。

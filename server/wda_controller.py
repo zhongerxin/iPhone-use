@@ -29,10 +29,12 @@ TYPING_PIECE = 200
 CALL_BUDGET = 90
 DEFAULT_MAX_NODES = 200
 INPUT_TTL = 600
+FOCUS_LOST = "Keyboard focus left the field before typing (the keyboard closed or the field re-rendered); no text was entered. Inspect the screenshot, tap the visible field with pua_tap x/y, then type without a selector."
 # A selector that leads to no action is not retried in other spellings: the error hands back
 # the screen so the very next call can act by coordinates.
 SELECTOR_FAILURES = ("no_such_element","ambiguous_target","occluded_target","offscreen_target","not_editable","no_focused_field","search_exhausted")
 VISUAL_FAILURES = SELECTOR_FAILURES + ("no_scroll_progress","scroll_context_changed","modal_requires_region","blocked_scroll_region","postcondition_failed","input_mismatch",
+                                      "keyboard_input_unreliable","input_unverified",
                                       "element not interactable","element click intercepted","invalid element state","no such element")
 
 
@@ -454,7 +456,9 @@ class PhoneController:
             tool,step="pua_tap","Inspect the attached screenshot FIRST. A popup may cover the target; dismiss its visible close/cancel control before tapping the field or target. tap_point is the background element's location, NOT proof it can be clicked."
         elif error.code in ("search_exhausted","no_scroll_progress","scroll_context_changed","modal_requires_region","blocked_scroll_region"):
             tool,step=None,"Inspect the attached screenshot FIRST for the last row/end marker, unchanged content, wrong region, fixed header or popup. Decide whether another swipe is warranted and choose the visible target/region/direction; do not automatically repeat scrolling or increase its budget. No progress alone does not prove an empty or complete list."
-        elif error.code in ("postcondition_failed","input_mismatch"):
+        elif error.code=="keyboard_input_unreliable":
+            tool,step=None,"Inspect the attached screenshot FIRST to read the field and the keyboard in use. The keyboard dropped or reordered synthesized characters; third-party keyboards (for example WeType) commonly do this. Do not type the same text again into this keyboard. Ask the user to switch to the Apple system keyboard, then replace the field text once; or tap the visible keyboard keys one by one with pua_tap x/y. Read the field back before submitting."
+        elif error.code in ("postcondition_failed","input_mismatch","input_unverified"):
             tool,step=None,"Inspect the attached screenshot FIRST to establish the actual page, field text or submission result. Continue only the missing work; do not blindly repeat the previous click, input or submission."
         elif typing:
             tool,step="pua_tap","Inspect the attached screenshot FIRST for a popup or wrong page. Tap the visible editable field with pua_tap x/y, then call pua_type_text with text and no selector. If a prior tap failed to focus the field, do not repeat the same point blindly; choose a new target from the current screenshot."
@@ -682,13 +686,17 @@ class PhoneController:
             self.switch_to_coordinates(error,typing=True);raise
         if ("\n" in text or "\r" in text) and kind!="XCUIElementTypeTextView":
             fail("newline_unsafe","Line breaks are allowed only for a verified TextView.")
-        before=(self.client.session("GET",path+"/attribute/value") or "") if verify and not replace else ""
+        before=(self.read_value(path,kind,typed=False) or "") if verify and not replace else ""
         self.pending_input=None
         # Without a selector the field was focused by a coordinate tap; another tap could move the caret.
         if selector is not None:self.post(path+"/click",{})
         if replace:
-            self.post(path+"/clear",{})
-        return self.type_pieces({"path":path,"focused":selector is None,"pieces":split_text(text,self.typing_piece),"typed":0,"total":len(text),
+            try:self.post(path+"/clear",{})
+            except WDAError as error:
+                # The focused ID resolves through keyboard focus; losing it here means nothing was typed.
+                if selector is not None or error.code!="stale element reference":raise
+                fail("no_focused_field",FOCUS_LOST,action_executed=False)
+        return self.type_pieces({"path":path,"kind":kind,"focused":selector is None,"pieces":split_text(text,self.typing_piece),"typed":0,"total":len(text),
                                  "expected":text if replace else str(before)+text,"verify":verify,"submit":submit,"expect":expect,"observe":observe})
 
     def focused_field(self):
@@ -741,9 +749,8 @@ class PhoneController:
                     "next_step":"Call pua_type_text with only continue_token to type the rest. Do not resend the text or act on the phone in between."}
         self.pending_input=None
         if plan["verify"]:
-            actual=self.client.session("GET",plan["path"]+"/attribute/value")
-            if actual!=plan["expected"]:
-                fail("input_mismatch","Typed text did not round-trip exactly. Do not submit or blindly type it again.",expected_length=len(plan["expected"]),actual_length=len(str(actual or "")))
+            actual=self.read_value(plan["path"],plan.get("kind"))
+            if actual!=plan["expected"]:self.mismatched_input(plan,actual)
         result={"action_executed":True,"action_complete":True,"verified":plan["verify"],"verification_deferred":not plan["verify"],"exact_readback":plan["verify"],"characters":plan["total"],"submitted":False}
         if plan["submit"]:
             self.post("/wda/keys",{"value":["\n"]})
@@ -754,6 +761,35 @@ class PhoneController:
             if plan["submit"]:result.update(submission_verified=True,verification_scope="Expected selector is present; verify the final business outcome before claiming task completion.")
         if plan["observe"]!="none":result["observation"]=self.observe_after(plan["observe"])
         return result
+
+    def read_value(self,path,kind=None,typed=True):
+        """Read field text. An ID from /element/active resolves through WDA's `hasKeyboardFocus == 1` query
+        and goes stale once the keyboard closes or the layout shifts; finding the field again by type
+        re-caches the same ID (WDA keys IDs by accessibility UID) under a query that no longer needs focus."""
+        try:return self.client.session("GET",path+"/attribute/value")
+        except WDAError as error:
+            if error.code!="stale element reference" or kind not in EDITABLE:raise
+            stale_error=error
+        ident=path[len("/element/"):]
+        found=self.client.session("POST","/elements",{"using":"predicate string","value":predicate({"type":kind})}) or []
+        if not any(isinstance(item,dict) and quote(str(item.get(ELEMENT_KEY) or item.get("ELEMENT")),safe="")==ident for item in found):
+            if not typed:fail("no_focused_field",FOCUS_LOST,action_executed=False)
+            fail("input_unverified","Text was sent, but the field could no longer be read back: keyboard focus moved or the field re-rendered. Do not submit or type it again before checking the field.",
+                 reason="field_reference_lost",cause={"code":stale_error.code})
+        return self.client.session("GET",path+"/attribute/value")
+
+    def mismatched_input(self,plan,actual):
+        """Name dropped or reordered keystrokes apart from formatting changes by the app."""
+        expected=plan["expected"];actual=str(actual or "")
+        sizes={"expected_length":len(expected),"actual_length":len(actual)}
+        # Only characters that were sent, fewer of them: the keyboard lost or shuffled keystrokes.
+        if len(actual)<len(expected) and not collections.Counter(actual)-collections.Counter(expected):
+            existing=expected[:len(expected)-plan["total"]]
+            try:keys=len(self.client.session("POST","/elements",{"using":"predicate string","value":predicate({"type":"Key"})}) or [])
+            except WDAError:keys=None
+            fail("keyboard_input_unreliable","The keyboard did not receive the typed characters intact. Third-party keyboards often break XCTest typing; do not submit or type the same text again.",
+                 reason="no_characters_received" if actual==existing else "characters_dropped_or_reordered",keyboard_keys_exposed=keys,**sizes)
+        fail("input_mismatch","Typed text did not round-trip exactly. Do not submit or blindly type it again.",**sizes)
 
     def continue_input(self,token):
         plan=self.pending_input
