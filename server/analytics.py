@@ -27,8 +27,8 @@ TOOLS = frozenset("pua_" + op for op in (
     "press_button", "screenshot", "launch_app", "wait", "scroll_find", "collect_list", "apps", "batch", "screen", "screen_action"))
 ERRORS = frozenset((
     "ambiguous_target", "clipboard_unavailable", "device_busy", "http_error",
-    "input_continuation_expired", "input_mismatch", "invalid_argument", "invalid_response",
-    "invalid_selector", "mirroring_conflict", "newline_requires_intent", "newline_unsafe",
+    "input_continuation_expired", "input_mismatch", "input_unverified", "invalid_argument", "invalid_response",
+    "invalid_selector", "keyboard_input_unreliable", "mirroring_conflict", "newline_requires_intent", "newline_unsafe",
     "no_focused_field", "no_scroll_progress", "no_such_element", "not_editable", "not_ready",
     "occluded_target", "offscreen_target", "phone_locked", "postcondition_failed", "preview_paused",
     "pua_foreground_unavailable", "pua_recovery_required", "pua_timeout", "pua_transport_error", "pua_unreachable", "response_too_large",

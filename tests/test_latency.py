@@ -519,6 +519,81 @@ class CoordinateFallbackTests(PhoneCase):
         self.assertTrue(appended["action_complete"])
         self.assertEqual(field["value"], "坐标聚焦后输入++")
 
+    def test_focused_field_readback_survives_the_keyboard_closing(self):
+        # /element/active IDs resolve through keyboard focus; after the keyboard closes the
+        # readback finds the field again by type under the same ID instead of failing stale.
+        field = self.client.elements[0]
+        field.update(kind="XCUIElementTypeTextView", value="")
+        self.client.filter_types = True
+        self.client.focused = field
+        self.client.blur_after_keys = True
+        result = self.phone.type_text(text="1565229", verify=True)
+        self.assertTrue(result["exact_readback"])
+        self.assertEqual(field["value"], "1565229")
+        paths = self.paths()
+        self.assertEqual(paths[paths.index("/wda/keys") + 1:],
+                         ["/element/target/attribute/value", "/elements", "/element/target/attribute/value"])
+        self.assertEqual(self.client.calls[paths.index("/elements")][2]["value"], "type == 'XCUIElementTypeTextView'")
+        self.assertEqual([path for _, path, _ in self.client.actions()], ["/element/target/clear", "/wda/keys"])
+
+    def test_lost_focused_field_reports_unverified_input_without_retyping(self):
+        field = self.client.elements[0]
+        self.client.focused = field
+        self.client.blur_after_keys = True
+        original = self.client.session
+
+        def session(method, path, payload=None, timeout=None):
+            if path == "/elements":
+                self.client.calls.append((method, path, payload))
+                return []  # The field re-rendered under another ID.
+            return original(method, path, payload, timeout)
+
+        with patch.object(self.client, "session", side_effect=session):
+            error = self.assert_code("input_unverified", lambda: self.phone.type_text(text="1565229", submit=True, verify=True))
+        self.assertEqual(error.details["reason"], "field_reference_lost")
+        self.assertEqual(error.details["cause"], {"code": "stale element reference"})
+        self.assertTrue(error.details["action_executed"])
+        self.assertTrue(error.details["recovery"]["visual_check_required"])
+        self.assertEqual([path for _, path, _ in self.client.actions()], ["/element/target/clear", "/wda/keys"])
+
+    def test_focus_lost_before_typing_types_nothing(self):
+        field = self.client.elements[0]
+        field["value"] = "old"
+        self.client.focused = field
+        original = self.client.session
+
+        def session(method, path, payload=None, timeout=None):
+            if path == "/element/target/clear":
+                self.client.focused = None  # The keyboard closed between the focus query and clear.
+            return original(method, path, payload, timeout)
+
+        with patch.object(self.client, "session", side_effect=session):
+            error = self.assert_code("no_focused_field", lambda: self.phone.type_text(text="1565229"))
+        self.assertFalse(error.details["action_executed"])
+        self.assertEqual(error.details["recovery"]["use"], "coordinates")
+        self.assertFalse(any(path == "/wda/keys" for _, path, _ in self.client.actions()))
+        self.assertEqual(field["value"], "old")
+
+    def test_focus_lost_before_an_append_readback_types_nothing(self):
+        field = self.client.elements[0]
+        field["value"] = "15"
+        self.client.focused = field
+        original = self.client.session
+
+        def session(method, path, payload=None, timeout=None):
+            if path == "/element/target/attribute/value":
+                self.client.focused = None
+            if path == "/elements":
+                self.client.calls.append((method, path, payload))
+                return []
+            return original(method, path, payload, timeout)
+
+        with patch.object(self.client, "session", side_effect=session):
+            error = self.assert_code("no_focused_field", lambda: self.phone.type_text(text="65229", replace=False, verify=True))
+        self.assertFalse(error.details["action_executed"])
+        self.assertEqual(self.client.actions(), [])
+        self.assertEqual(field["value"], "15")
+
     def test_focused_input_keeps_every_text_safeguard(self):
         error = self.assert_code("no_focused_field", lambda: self.phone.type_text(text="nowhere"))
         self.assertFalse(error.details["action_executed"])

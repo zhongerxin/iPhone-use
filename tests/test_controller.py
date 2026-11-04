@@ -45,6 +45,11 @@ class FakeWDA:
         self.foreground_sequence = None
         self.gesture_effects = None
         self.focused = None
+        # IDs returned by /element/active resolve through `hasKeyboardFocus == 1` until another query re-caches them.
+        self.focus_bound = set()
+        self.blur_after_keys = False
+        # Most tests match by label only; opt in to filter `type == '...'` clauses as WDA does.
+        self.filter_types = False
         self.rich_elements = False
         self.source_root = None
         self.settings = []
@@ -97,17 +102,21 @@ class FakeWDA:
             if self.focused is None:
                 raise WDAError("no such element", "No element has keyboard focus")
             answer = {ELEMENT_KEY: self.focused["id"]}
+            self.focus_bound.add(self.focused["id"])
             return {**answer, "type": self.focused["kind"]} if self.rich_elements else answer
         if path == "/elements":
             value = payload["value"]
             labels = re.findall(r"label == '([^']*)'", value)
             matches = [item for item in self.elements if not labels or item["label"] == labels[0]]
+            types = re.findall(r"type == '([^']*)'", value)
+            matches = [item for item in matches if not (self.filter_types and types) or item["kind"] == types[0]]
             enabled = re.search(r"enabled == (true|false)", value)
             if enabled:
                 matches = [item for item in matches if item.get("enabled", True) is (enabled[1] == "true")]
             if "CONTAINS" in value:
                 fragment = re.search(r"label CONTAINS '([^']*)'", value)[1]
                 matches = [item for item in self.elements if fragment in item["label"]]
+            self.focus_bound.difference_update(item["id"] for item in matches)
             if not self.rich_elements:
                 return [{ELEMENT_KEY: item["id"]} for item in matches]
             # The pinned WDA answers like this once compact responses are switched off.
@@ -118,6 +127,8 @@ class FakeWDA:
         if path.startswith("/element/"):
             parts = path.split("/")
             element = next(item for item in self.elements if item["id"] == parts[2])
+            if element["id"] in self.focus_bound and self.focused is not element:
+                raise WDAError("stale element reference", "No matches found for Elements matching predicate 'hasKeyboardFocus == 1'")
             suffix = "/".join(parts[3:])
             if suffix == "rect":
                 return element["rect"].copy()
@@ -156,6 +167,8 @@ class FakeWDA:
             text = "".join(payload["value"])
             if self.focused is not None and text != "\n" and self.input_override is None:
                 self.focused["value"] += text
+            if self.blur_after_keys:
+                self.focused = None
             return None
         if path in ("/wda/tap", "/wda/pressButton", "/wda/performIoHidEvent", "/actions"):
             return None
@@ -888,6 +901,44 @@ class ControllerTests(unittest.TestCase):
         paths = [call[1] for call in self.client.actions()]
         self.assertNotIn("/wda/keys", paths)
         self.assertEqual(paths.count("/element/target/value"), 1)
+
+    def test_dropped_keystrokes_are_reported_as_unreliable_keyboard_input(self):
+        # Observed with WeType: "1565229" became "15"; an append became "6515"; nothing landed at all.
+        for existing, replace, landed, reason in (("", True, "15", "characters_dropped_or_reordered"),
+                                                  ("15", False, "6515", "characters_dropped_or_reordered"),
+                                                  ("", True, "", "no_characters_received"),
+                                                  ("15", False, "15", "no_characters_received")):
+            with self.subTest(landed=landed, replace=replace):
+                self.setUp()
+                self.client.filter_types = True
+                self.client.elements[0].update(kind="XCUIElementTypeTextView", value=existing)
+                self.client.input_override = landed
+                error = self.assert_code("keyboard_input_unreliable", lambda: self.phone.type_text(
+                    {"type": "TextView"}, "1565229" if replace else "65229", replace=replace, submit=True, verify=True))
+                self.assertEqual(error.details["reason"], reason)
+                self.assertEqual((error.details["expected_length"], error.details["actual_length"]), (7, len(landed)))
+                self.assertEqual(error.details["keyboard_keys_exposed"], 0)
+                self.assertTrue(error.details["action_executed"])
+                self.assertTrue(error.details["recovery"]["visual_check_required"])
+                self.assertIn("system keyboard", error.details["recovery"]["next_step"])
+                self.assertIn("image", error.details["observation"])
+                self.assertNotIn({"value": ["\n"]}, [body for _, _, body in self.client.actions()])
+
+    def test_exposed_system_keyboard_keys_are_counted_for_the_fallback(self):
+        self.client.filter_types = True
+        self.client.elements.append({"id": "key-1", "label": "1", "kind": "XCUIElementTypeKey",
+                                     "rect": {"x": 10, "y": 700, "width": 30, "height": 40}, "hittable": True, "value": ""})
+        self.client.input_override = "1"
+        error = self.assert_code("keyboard_input_unreliable", lambda: self.phone.type_text({"label": "Target"}, "1565229", verify=True))
+        self.assertEqual(error.details["keyboard_keys_exposed"], 1)
+
+    def test_app_formatting_is_still_a_plain_input_mismatch(self):
+        for landed in ("156 5229", "1565229 ", "1565"+"x"):
+            with self.subTest(landed=landed):
+                self.setUp()
+                self.client.input_override = landed
+                error = self.assert_code("input_mismatch", lambda: self.phone.type_text({"label": "Target"}, "1565229", verify=True))
+                self.assertNotIn("keyboard_keys_exposed", error.details)
 
     def test_newline_in_single_line_field_is_blocked_even_with_intent(self):
         self.assert_code("newline_requires_intent", lambda: self.phone.type_text({"label": "Target"}, "a\nb", observe="none"))
