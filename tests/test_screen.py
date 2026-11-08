@@ -318,6 +318,17 @@ class ScreenHubTests(unittest.TestCase):
         (self.directory / "config.json").write_text('{"udid":"TEST-DEVICE-1234", "mjpeg_device_port":"http://remote"}')
         self.assertIsNone(self.hub._command())
 
+    def test_stream_command_prefers_valid_network_target(self):
+        (self.directory / "config.json").write_text(json.dumps({"udid": "TEST-DEVICE-1234"}))
+        (self.directory / "runtime/forward/node_modules/appium-ios-device").mkdir(parents=True)
+        with patch("wda_screen.shutil.which", return_value="/usr/bin/node"):
+            (self.directory / "network.json").write_text(json.dumps({"host": "100.64.0.7", "mjpeg_port": 9200}))
+            self.assertEqual(self.hub._command()[-2:], ["tcp:100.64.0.7", "9200"])
+            for bad in ({"host": "http://x/"}, {"host": "100.64.0.7", "mjpeg_port": "9100"},
+                        {"host": "100.64.0.7", "enabled": False}):
+                (self.directory / "network.json").write_text(json.dumps(bad))
+                self.assertEqual(self.hub._command()[-2:], ["TEST-DEVICE-1234", "9100"])
+
 
 class NodeStreamTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is not installed.")

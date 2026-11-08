@@ -31,6 +31,26 @@ SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
 
 
+NETWORK_HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})|[0-9A-Fa-f:]{2,39}")
+
+
+def network_target(state_dir):
+    """Optional network.json: reach WDA over a private network (e.g. Tailscale) instead of USB."""
+    try:
+        network = json.loads((Path(state_dir) / "network.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(network, dict) or network.get("enabled", True) is not True:
+        return None
+    host = network.get("host")
+    ports = {key: network.get(key, default) for key, default in (("wda_port", 8100), ("mjpeg_port", 9100))}
+    if not isinstance(host, str) or not NETWORK_HOST.fullmatch(host):
+        return None
+    if any(isinstance(v, bool) or not isinstance(v, int) or not 1024 <= v <= 65535 for v in ports.values()):
+        return None
+    return {"host": host, **ports}
+
+
 def jpeg_dimensions(raw):
     """Read JPEG SOF dimensions without decoding pixels or trusting HTTP headers."""
     if not raw.startswith(b"\xff\xd8"):
@@ -417,6 +437,9 @@ class ScreenHub:
                 return None
             if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
                 return None
+            network = network_target(self.state_dir)
+            if network:
+                udid, port = "tcp:" + network["host"], network["mjpeg_port"]
             node = shutil.which("node")
             runtime = self.state_dir / "runtime/forward"
             source = Path(__file__).resolve().parents[1] / "tooling/screen-stream.mjs"
