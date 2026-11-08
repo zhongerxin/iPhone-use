@@ -25,7 +25,9 @@ idle=${2:-30}
 
 if [ ! -x "$venv/bin/python" ] || ! "$venv/bin/python" -m pip show pymobiledevice3 2>/dev/null | grep -qx "Version: $PMD3_VERSION"; then
   python3 -m venv "$venv"
-  "$venv/bin/python" -m pip install -q --disable-pip-version-check "pymobiledevice3==$PMD3_VERSION"
+  "$venv/bin/python" -m pip install -q --disable-pip-version-check --upgrade pip
+  # Newer cryptography releases ship no Intel macOS wheel; take the newest prebuilt one.
+  "$venv/bin/python" -m pip install -q --disable-pip-version-check --only-binary cryptography "pymobiledevice3==$PMD3_VERSION"
 fi
 
 umask 077
