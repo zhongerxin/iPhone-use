@@ -14,7 +14,7 @@ const preview = (fields = {}) => ({ server_time: 1000, frame_age_ms: 0, frame: n
 // Fixtures exist only in this isolated DOM test, never in the shipped widget.
 const frame = (seq = 1) => ({ seq, data: 'test-image-only', mimeType: 'image/png', width: 900, height: 1800 });
 
-async function harness({ reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
+async function harness({ language, reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
   let now = 0;
   let timerId = 0;
   let instance;
@@ -40,6 +40,7 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
     releasePointerCapture() { this.captured = undefined; },
     click() { this.handlers.get('click')?.(); },
     removeAttribute(name) { delete this[name]; },
+    setAttribute(name, value) { this[name] = value; },
     cloneNode() { return { ...this, style: { ...this.style }, dataset: { ...this.dataset }, children: [], animation: undefined }; },
     appendChild(node) { this.children.push(node); node.parent = this; return node; },
     remove() { const children = this.parent?.children; if (children?.includes(this)) children.splice(children.indexOf(this), 1); },
@@ -79,6 +80,7 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
   };
   await vm.runInNewContext(code, {
     MockApp, document,
+    ...(language ? { navigator: { language } } : {}),
     matchMedia: () => ({ matches: reducedMotion }),
     performance: { now: () => now },
     ResizeObserver: class { constructor(callback) { this.callback = callback; resize = this; } observe() {} disconnect() { this.disconnected = true; } },
@@ -1027,4 +1029,20 @@ test('viewport recovery failures are throttled while frame polling continues', a
   assert.equal(h.calls.filter(c => c.name === 'pua_screen_frame').length, 8);
   await h.tick();
   assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 2);
+});
+
+test('widget follows an English locale and keeps Chinese for zh', async () => {
+  const en = await harness({ language: 'en-US' });
+  assert.equal(en.elements['empty-state-text'].textContent, 'Connecting…');
+  assert.equal(en.elements['live-text'].textContent, 'Connecting');
+  assert.equal(en.elements['tool-refresh']['aria-label'], 'Refresh connection');
+  assert.equal(en.document.title, 'iPhone Screen');
+  en.app.ontoolresult({ structuredContent: preview({ frame_available: false, service_ready: false }) });
+  assert.equal(en.elements['empty-state-text'].textContent, 'Not connected');
+  en.app.ontoolresult({ structuredContent: preview({ paused: true, pause_reason: 'device_locked' }) });
+  assert.equal(en.elements['empty-state-text'].textContent, 'Take over on your iPhone');
+  assert.equal(en.elements['live-text'].textContent, 'Waiting for unlock');
+  const zh = await harness({ language: 'zh-CN' });
+  assert.equal(zh.elements['empty-state-text'].textContent, '正在连接');
+  assert.equal(zh.elements['tool-refresh']['aria-label'], '刷新连接');
 });

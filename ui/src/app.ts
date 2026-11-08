@@ -80,20 +80,58 @@ const FRAME_INTERVAL = 250;
 const REQUEST_TIMEOUT = 3000;
 // A screenshot or Home may queue behind the phone operation already running.
 const ACTION_TIMEOUT = 12000;
-const LIVE_TEXT: Record<LiveState, string> = { connecting: '连接中', live: 'Live', paused: '已暂停', offline: '未连接' };
-const EMPTY_TEXT: Record<EmptyState, string> = {
-  connecting: '正在连接', offline: '未连接', locked: '请在手机上接管操作',
-  authentication: '请在手机上接管操作', paused: '请在手机上接管操作', unavailable: '画面暂不可用',
-};
-const DONE: Record<ToolName, string> = { refresh: '已刷新连接', home: '已回到主屏幕', screenshot: '截图已复制到剪贴板' };
-const FAILED: Record<string, string> = {
-  device_busy: '手机正在执行操作，请稍后再试',
-  preview_paused: '认证接管期间已暂停',
-  clipboard_unavailable: '截图未能写入剪贴板',
-  pua_unreachable: '未连接到手机',
-  phone_locked: '请先解锁手机',
-  stale_viewport: '屏幕方向已变化，请等待新画面',
-};
+// Chinese for zh locales (and when no locale is known), English everywhere else.
+const LANG: 'zh' | 'en' = /^zh\b/i.test(globalThis.navigator?.language ?? 'zh') ? 'zh' : 'en';
+const STRINGS = {
+  zh: {
+    live: { connecting: '连接中', live: 'Live', paused: '已暂停', offline: '未连接' },
+    empty: { connecting: '正在连接', offline: '未连接', locked: '请在手机上接管操作',
+      authentication: '请在手机上接管操作', paused: '请在手机上接管操作', unavailable: '画面暂不可用' },
+    done: { refresh: '已刷新连接', home: '已回到主屏幕', screenshot: '截图已复制到剪贴板' },
+    failed: {
+      device_busy: '手机正在执行操作，请稍后再试', preview_paused: '认证接管期间已暂停',
+      clipboard_unavailable: '截图未能写入剪贴板', pua_unreachable: '未连接到手机',
+      phone_locked: '请先解锁手机', stale_viewport: '屏幕方向已变化，请等待新画面',
+    } as Record<string, string>,
+    waitingUnlock: '等待解锁',
+    lockedTitle: '解锁 iPhone 后继续任务，或点击刷新恢复预览',
+    pausedTitle: '预览已暂停；完成手机认证后继续任务或点击刷新恢复画面',
+    retry: '操作未完成，请重试',
+    refreshOffline: '未连接到手机，请确认连接后重试',
+    uncertain: '操作结果不确定，请查看手机后再操作',
+    checkPhone: '操作未完成，请查看手机状态',
+    screenTitle: '点击操作手机；拖动或触控板双指滑动来滚动、翻页',
+    title: 'iPhone 屏幕', screenLabel: 'iPhone 实时屏幕', toolbar: '手机工具',
+    refreshLabel: '刷新连接', refreshTitle: '重新连接；认证完成后点击可恢复预览',
+    homeLabel: '回到主屏幕', screenshotLabel: '截图到剪贴板',
+  },
+  en: {
+    live: { connecting: 'Connecting', live: 'Live', paused: 'Paused', offline: 'Offline' },
+    empty: { connecting: 'Connecting…', offline: 'Not connected', locked: 'Take over on your iPhone',
+      authentication: 'Take over on your iPhone', paused: 'Take over on your iPhone', unavailable: 'Screen unavailable' },
+    done: { refresh: 'Connection refreshed', home: 'Back on the Home Screen', screenshot: 'Screenshot copied to clipboard' },
+    failed: {
+      device_busy: 'iPhone is busy with another action; try again shortly', preview_paused: 'Paused while you authenticate',
+      clipboard_unavailable: 'Couldn’t copy the screenshot to the clipboard', pua_unreachable: 'Not connected to iPhone',
+      phone_locked: 'Unlock your iPhone first', stale_viewport: 'Screen rotated; waiting for a new frame',
+    } as Record<string, string>,
+    waitingUnlock: 'Waiting for unlock',
+    lockedTitle: 'Unlock the iPhone to continue, or click Refresh to resume the preview',
+    pausedTitle: 'Preview paused; finish authenticating on the phone, then continue or click Refresh',
+    retry: 'Action didn’t complete; try again',
+    refreshOffline: 'Not connected to iPhone; check the connection and try again',
+    uncertain: 'Result uncertain; check the phone before acting again',
+    checkPhone: 'Action didn’t complete; check the phone',
+    screenTitle: 'Click to tap; drag or two-finger scroll to scroll and page',
+    title: 'iPhone Screen', screenLabel: 'iPhone live screen', toolbar: 'Phone tools',
+    refreshLabel: 'Refresh connection', refreshTitle: 'Reconnect; click after authenticating to resume the preview',
+    homeLabel: 'Go to Home Screen', screenshotLabel: 'Copy screenshot to clipboard',
+  },
+}[LANG];
+const LIVE_TEXT: Record<LiveState, string> = STRINGS.live;
+const EMPTY_TEXT: Record<EmptyState, string> = STRINGS.empty;
+const DONE: Record<ToolName, string> = STRINGS.done;
+const FAILED: Record<string, string> = STRINGS.failed;
 
 // Use confirmed model names from USB discovery, never a generation threshold:
 // standard iPhone 14, the e models and every SE have different screen designs.
@@ -369,10 +407,10 @@ function consume(value: unknown) {
     root.dataset.operating = 'false';
     emptyState.hidden = false;
     setLive('paused');
-    liveText.textContent = preview.pause_reason === 'device_locked' ? '等待解锁' : LIVE_TEXT.paused;
+    liveText.textContent = preview.pause_reason === 'device_locked' ? STRINGS.waitingUnlock : LIVE_TEXT.paused;
     liveText.title = preview.pause_reason === 'device_locked'
-      ? '解锁 iPhone 后继续任务，或点击刷新恢复预览'
-      : '预览已暂停；完成手机认证后继续任务或点击刷新恢复画面';
+      ? STRINGS.lockedTitle
+      : STRINGS.pausedTitle;
     showEmpty(preview.pause_reason === 'device_locked' ? 'locked'
       : preview.pause_reason === 'authentication' ? 'authentication' : 'paused');
     return;
@@ -491,18 +529,18 @@ async function act(name: ToolName) {
     const data = result.structuredContent as (Partial<Preview> & { service_ready?: boolean; error?: { code?: string } }) | undefined;
     if (result.isError || data?.error) {
       if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
-      notify(FAILED[data?.error?.code ?? ''] ?? '操作未完成，请重试', true);
+      notify(FAILED[data?.error?.code ?? ''] ?? STRINGS.retry, true);
     } else {
       // A refresh answers with the new stream identity; take the next frame at once.
       if (name === 'refresh') consume(data);
-      notify(name === 'refresh' && data?.service_ready === false ? '未连接到手机，请确认连接后重试' : DONE[name], name === 'refresh' && data?.service_ready === false);
+      notify(name === 'refresh' && data?.service_ready === false ? STRINGS.refreshOffline : DONE[name], name === 'refresh' && data?.service_ready === false);
       if (timer) clearTimeout(timer);
       timer = undefined;
       schedule(0);
     }
   } catch {
     if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
-    notify('操作未完成，请重试', true);
+    notify(STRINGS.retry, true);
   } finally {
     acting = false;
     delete tools[name].dataset.busy;
@@ -589,9 +627,9 @@ async function sendPointer(args: Record<string, string | number>) {
   try {
     const result = await app.callServerTool({ name: 'pua_screen_action', arguments: args }, { timeout: ACTION_TIMEOUT });
     const data = result.structuredContent as { error?: { code?: string; uncertain?: boolean } } | undefined;
-    if (result.isError || data?.error) notify(data?.error?.uncertain ? '操作结果不确定，请查看手机后再操作' : FAILED[data?.error?.code ?? ''] ?? '操作未完成，请查看手机状态', true);
+    if (result.isError || data?.error) notify(data?.error?.uncertain ? STRINGS.uncertain : FAILED[data?.error?.code ?? ''] ?? STRINGS.checkPhone, true);
   } catch {
-    notify('操作结果不确定，请查看手机后再操作', true);
+    notify(STRINGS.uncertain, true);
   } finally {
     acting = false;
     freshUntil = -Infinity; // Require another fresh stream heartbeat before the next gesture.
@@ -642,7 +680,18 @@ screen.addEventListener('wheel', wheel, { passive: false });
 const pointerHandlers = { pointerdown: pointerDown, pointermove: pointerMove, pointerup: pointerUp,
   pointercancel: cancelPointer, lostpointercapture: cancelPointer };
 for (const [name, handler] of Object.entries(pointerHandlers)) screen.addEventListener(name, handler as EventListener);
-screen.title = '点击操作手机；拖动或触控板双指滑动来滚动、翻页';
+screen.title = STRINGS.screenTitle;
+// index.html ships the Chinese text; relabel the static chrome for the detected language.
+document.title = STRINGS.title;
+liveText.textContent = LIVE_TEXT[(root.dataset.live as LiveState) || 'connecting'] ?? LIVE_TEXT.connecting;
+root.setAttribute('aria-label', STRINGS.screenLabel);
+image.alt = STRINGS.screenLabel;
+document.getElementById('toolbar')?.setAttribute('aria-label', STRINGS.toolbar);
+for (const [button, label, title] of [[tools.refresh, STRINGS.refreshLabel, STRINGS.refreshTitle],
+  [tools.home, STRINGS.homeLabel, STRINGS.homeLabel], [tools.screenshot, STRINGS.screenshotLabel, STRINGS.screenshotLabel]] as const) {
+  button.setAttribute('aria-label', label);
+  button.title = title;
+}
 
 const toolHandlers = (Object.keys(tools) as ToolName[]).map(name => {
   const handler = () => { void act(name); };
