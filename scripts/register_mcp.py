@@ -54,7 +54,12 @@ def main():
     print(json.dumps(installation,ensure_ascii=False),flush=True)
     # Same name as the plugin registration: Config wins over Plugin in Codex,
     # so there is one namespace, without the shared agent-plugin tool budget.
-    subprocess.run(["codex","mcp","add","iphone_use","--","python3",str(server)],check=True)
+    command=["codex","mcp","add","iphone_use"]
+    config=root/"mcp.json"
+    language=json.loads(config.read_text()).get("mcpServers",{}).get("iphone_use",{}).get("env",{}).get("IPHONE_USE_LANGUAGE") if config.is_file() else None
+    if language in ("default","ja"):
+        command.extend(["--env","IPHONE_USE_LANGUAGE="+language])
+    subprocess.run([*command,"--","python3",str(server)],check=True)
     retire_previous_registration()
 
 

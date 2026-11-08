@@ -2,19 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { transform } from 'esbuild';
+import { build } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 
 const source = await readFile(new URL('../src/app.ts', import.meta.url), 'utf8');
-const { code } = await transform(`(async () => {
-${source.replace("import { App } from '@modelcontextprotocol/ext-apps';", 'const App = globalThis.MockApp;')}
-})()`, { loader: 'ts', target: 'es2022' });
+const codes = {};
+for (const language of ['default', 'ja']) {
+  const { outputFiles } = await build({
+    stdin: { contents: source.replace("import { App } from '@modelcontextprotocol/ext-apps';", 'const App = globalThis.MockApp;'),
+      loader: 'ts', resolveDir: fileURLToPath(new URL('../src/', import.meta.url)) },
+    bundle: true, format: 'esm', target: 'es2022', write: false,
+    define: { __IPHONE_USE_LANGUAGE__: JSON.stringify(language) },
+  });
+  codes[language] = `(async () => {\n${outputFiles[0].text}\n})()`;
+}
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 const preview = (fields = {}) => ({ server_time: 1000, frame_age_ms: 0, frame: null, viewport: null, busy: false, paused: false, events: [], ...fields });
 // Fixtures exist only in this isolated DOM test, never in the shipped widget.
 const frame = (seq = 1) => ({ seq, data: 'test-image-only', mimeType: 'image/png', width: 900, height: 1800 });
 
-async function harness({ reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
+async function harness({ language = 'default', reducedMotion = false, context = { displayMode: 'inline', availableDisplayModes: ['fullscreen'] }, reply, connectReply } = {}) {
   let now = 0;
   let timerId = 0;
   let instance;
@@ -77,7 +85,7 @@ async function harness({ reducedMotion = false, context = { displayMode: 'inline
     addEventListener: (name, fn) => listeners.set(name, fn),
     removeEventListener: name => listeners.delete(name),
   };
-  await vm.runInNewContext(code, {
+  await vm.runInNewContext(codes[language], {
     MockApp, document,
     matchMedia: () => ({ matches: reducedMotion }),
     performance: { now: () => now },
@@ -113,6 +121,35 @@ test('connects before requesting only fullscreen, then polls only the app frame 
   assert.equal(JSON.stringify(h.calls[0].arguments), '{"after_seq":0,"last_event_id":0}');
   assert.equal([...h.timers.values()][0].delay, 250);
   assert.equal(h.requestOptions[0].timeout, 3000);
+});
+
+test('Japanese status and authentication text are confined to the selected build', async () => {
+  const normal = await harness();
+  const japanese = await harness({ language: 'ja' });
+  assert.equal(normal.elements['empty-state-text'].textContent, '正在连接');
+  assert.equal(japanese.elements['empty-state-text'].textContent, '接続しています');
+  for (const [fields, defaultLabel, japaneseLabel] of [
+    [{ frame_available: false }, '正在连接', '接続しています'],
+    [{ frame_available: false, service_ready: false }, '未连接', '未接続'],
+    [{ paused: true, pause_reason: 'device_locked' }, '请在手机上接管操作', 'iPhoneで操作してください'],
+    [{ paused: true, pause_reason: 'authentication' }, '请在手机上接管操作', 'iPhoneで操作してください'],
+    [{ paused: true }, '请在手机上接管操作', 'iPhoneで操作してください'],
+  ]) {
+    for (const h of [normal, japanese]) h.app.ontoolresult({ structuredContent: preview(fields) });
+    assert.equal(normal.elements['empty-state-text'].textContent, defaultLabel);
+    assert.equal(japanese.elements['empty-state-text'].textContent, japaneseLabel);
+  }
+  japanese.app.ontoolresult({ structuredContent: preview({ frame: frame(), frame_available: true }) });
+  assert.equal(japanese.elements['live-text'].textContent, 'ライブ');
+});
+
+test('Japanese toolbar reports outcomes without changing the action contract', async () => {
+  const h = await harness({ language: 'ja', reply: params => Promise.resolve(params.name === 'pua_screen_action'
+    ? { structuredContent: { ok: true, action: 'home' } } : { structuredContent: preview() }) });
+  h.elements['tool-home'].click();
+  await flush();
+  assert.equal(JSON.stringify(h.calls[0]), '{"name":"pua_screen_action","arguments":{"action":"home"}}');
+  assert.equal(h.elements.toast.textContent, 'ホーム画面に戻りました');
 });
 
 test('preserves full frame aspect ratio and maps gestures using the point viewport', async () => {
@@ -828,13 +865,32 @@ test('host theme is applied and followed, and teardown releases the toolbar', as
 function pointerEvent(x, y, extra = {}) {
   return { clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, preventDefault() {}, ...extra };
 }
-async function livePointerHarness() {
-  const h = await harness();
+async function livePointerHarness(options) {
+  const h = await harness(options);
   h.app.ontoolresult({ structuredContent: preview({ frame: frame(), viewport: { width: 400, height: 800 } }) });
   h.elements.image.onload();
   h.pointer = (name, x, y, extra) => h.elements.screen.handlers.get(name)?.(pointerEvent(x, y, extra));
   return h;
 }
+test('Japanese pointer feedback preserves errors and never replays uncertain input', async () => {
+  for (const [error, expected] of [
+    [{ code: 'action_uncertain', uncertain: true }, '操作結果を確認できません。iPhoneの状態を見てから操作してください'],
+    [{ code: 'phone_locked' }, '先にiPhoneのロックを解除してください'],
+    [{ code: 'stale_viewport' }, '画面の向きが変わりました。新しい画面をお待ちください'],
+    [{ code: 'other' }, '操作が完了しませんでした。iPhoneの状態を確認してください'],
+    [null, '操作結果を確認できません。iPhoneの状態を見てから操作してください'],
+  ]) {
+    const h = await livePointerHarness({ language: 'ja', reply: () => error
+      ? Promise.resolve({ isError: true, structuredContent: { error } })
+      : Promise.reject(new Error('transport lost')) });
+    assert.equal(h.elements.screen.title, 'クリックでiPhoneを操作。ドラッグまたはトラックパッドの2本指スワイプでスクロール・ページ移動');
+    h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+    assert.equal(h.elements.toast.textContent, expected);
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+    assert.equal(h.calls[0].arguments.action, 'tap');
+    await h.app.onteardown();
+  }
+});
 test('pointer click and drag map scaled screen coordinates and dispatch once', async () => {
   const h = await livePointerHarness();
   h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();

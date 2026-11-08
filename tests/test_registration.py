@@ -54,6 +54,14 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual(config.stat().st_mode & 0o777, 0o600)
         self.assertFalse(list(self.config_home.glob('.iphone-use-config-*')))
 
+    def test_install_registers_the_explicit_locale_for_the_standard_mcp(self):
+        for language in ('default','ja'):
+            with self.subTest(language=language):
+                (self.root/'mcp.json').write_text(json.dumps({'mcpServers':{'iphone_use':{'env':{'IPHONE_USE_LANGUAGE':language}}}}))
+                with patch.object(registration.subprocess,'run') as run:
+                    self.invoke(self.installation)
+                self.assertEqual(run.call_args_list[0],call(['codex','mcp','add','iphone_use','--env','IPHONE_USE_LANGUAGE='+language,'--','python3',str(self.root/'server/iphone_use.py')],check=True))
+
     def test_unrelated_mcp_is_preserved_and_absent_or_malformed_previous_entry_is_harmless(self):
         for response in [Mock(returncode=1,stdout=''), Mock(returncode=0,stdout='invalid'),
                          Mock(returncode=0,stdout=json.dumps({"transport":{"type":"stdio","args":["/custom/server.py"]}}))]:

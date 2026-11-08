@@ -1,4 +1,5 @@
 import { App } from '@modelcontextprotocol/ext-apps';
+import { localize } from './localization';
 
 type Size = { width: number; height: number };
 type Point = { x: number; y: number };
@@ -80,19 +81,19 @@ const FRAME_INTERVAL = 250;
 const REQUEST_TIMEOUT = 3000;
 // A screenshot or Home may queue behind the phone operation already running.
 const ACTION_TIMEOUT = 12000;
-const LIVE_TEXT: Record<LiveState, string> = { connecting: '连接中', live: 'Live', paused: '已暂停', offline: '未连接' };
+const LIVE_TEXT: Record<LiveState, string> = { connecting: localize('连接中'), live: localize('Live'), paused: localize('已暂停'), offline: localize('未连接') };
 const EMPTY_TEXT: Record<EmptyState, string> = {
-  connecting: '正在连接', offline: '未连接', locked: '请在手机上接管操作',
-  authentication: '请在手机上接管操作', paused: '请在手机上接管操作', unavailable: '画面暂不可用',
+  connecting: localize('正在连接'), offline: localize('未连接'), locked: localize('请在手机上接管操作'),
+  authentication: localize('请在手机上接管操作'), paused: localize('请在手机上接管操作'), unavailable: localize('画面暂不可用'),
 };
-const DONE: Record<ToolName, string> = { refresh: '已刷新连接', home: '已回到主屏幕', screenshot: '截图已复制到剪贴板' };
+const DONE: Record<ToolName, string> = { refresh: localize('已刷新连接'), home: localize('已回到主屏幕'), screenshot: localize('截图已复制到剪贴板') };
 const FAILED: Record<string, string> = {
-  device_busy: '手机正在执行操作，请稍后再试',
-  preview_paused: '认证接管期间已暂停',
-  clipboard_unavailable: '截图未能写入剪贴板',
-  pua_unreachable: '未连接到手机',
-  phone_locked: '请先解锁手机',
-  stale_viewport: '屏幕方向已变化，请等待新画面',
+  device_busy: localize('手机正在执行操作，请稍后再试'),
+  preview_paused: localize('认证接管期间已暂停'),
+  clipboard_unavailable: localize('截图未能写入剪贴板'),
+  pua_unreachable: localize('未连接到手机'),
+  phone_locked: localize('请先解锁手机'),
+  stale_viewport: localize('屏幕方向已变化，请等待新画面'),
 };
 
 // Use confirmed model names from USB discovery, never a generation threshold:
@@ -369,10 +370,10 @@ function consume(value: unknown) {
     root.dataset.operating = 'false';
     emptyState.hidden = false;
     setLive('paused');
-    liveText.textContent = preview.pause_reason === 'device_locked' ? '等待解锁' : LIVE_TEXT.paused;
+    liveText.textContent = preview.pause_reason === 'device_locked' ? localize('等待解锁') : LIVE_TEXT.paused;
     liveText.title = preview.pause_reason === 'device_locked'
-      ? '解锁 iPhone 后继续任务，或点击刷新恢复预览'
-      : '预览已暂停；完成手机认证后继续任务或点击刷新恢复画面';
+      ? localize('解锁 iPhone 后继续任务，或点击刷新恢复预览')
+      : localize('预览已暂停；完成手机认证后继续任务或点击刷新恢复画面');
     showEmpty(preview.pause_reason === 'device_locked' ? 'locked'
       : preview.pause_reason === 'authentication' ? 'authentication' : 'paused');
     return;
@@ -491,18 +492,18 @@ async function act(name: ToolName) {
     const data = result.structuredContent as (Partial<Preview> & { service_ready?: boolean; error?: { code?: string } }) | undefined;
     if (result.isError || data?.error) {
       if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
-      notify(FAILED[data?.error?.code ?? ''] ?? '操作未完成，请重试', true);
+      notify(FAILED[data?.error?.code ?? ''] ?? localize('操作未完成，请重试'), true);
     } else {
       // A refresh answers with the new stream identity; take the next frame at once.
       if (name === 'refresh') consume(data);
-      notify(name === 'refresh' && data?.service_ready === false ? '未连接到手机，请确认连接后重试' : DONE[name], name === 'refresh' && data?.service_ready === false);
+      notify(name === 'refresh' && data?.service_ready === false ? localize('未连接到手机，请确认连接后重试') : DONE[name], name === 'refresh' && data?.service_ready === false);
       if (timer) clearTimeout(timer);
       timer = undefined;
       schedule(0);
     }
   } catch {
     if (name === 'refresh' && !image.src) showEmpty(previousEmptyState);
-    notify('操作未完成，请重试', true);
+    notify(localize('操作未完成，请重试'), true);
   } finally {
     acting = false;
     delete tools[name].dataset.busy;
@@ -589,9 +590,9 @@ async function sendPointer(args: Record<string, string | number>) {
   try {
     const result = await app.callServerTool({ name: 'pua_screen_action', arguments: args }, { timeout: ACTION_TIMEOUT });
     const data = result.structuredContent as { error?: { code?: string; uncertain?: boolean } } | undefined;
-    if (result.isError || data?.error) notify(data?.error?.uncertain ? '操作结果不确定，请查看手机后再操作' : FAILED[data?.error?.code ?? ''] ?? '操作未完成，请查看手机状态', true);
+    if (result.isError || data?.error) notify(data?.error?.uncertain ? localize('操作结果不确定，请查看手机后再操作') : FAILED[data?.error?.code ?? ''] ?? localize('操作未完成，请查看手机状态'), true);
   } catch {
-    notify('操作结果不确定，请查看手机后再操作', true);
+    notify(localize('操作结果不确定，请查看手机后再操作'), true);
   } finally {
     acting = false;
     freshUntil = -Infinity; // Require another fresh stream heartbeat before the next gesture.
@@ -642,7 +643,7 @@ screen.addEventListener('wheel', wheel, { passive: false });
 const pointerHandlers = { pointerdown: pointerDown, pointermove: pointerMove, pointerup: pointerUp,
   pointercancel: cancelPointer, lostpointercapture: cancelPointer };
 for (const [name, handler] of Object.entries(pointerHandlers)) screen.addEventListener(name, handler as EventListener);
-screen.title = '点击操作手机；拖动或触控板双指滑动来滚动、翻页';
+screen.title = localize('点击操作手机；拖动或触控板双指滑动来滚动、翻页');
 
 const toolHandlers = (Object.keys(tools) as ToolName[]).map(name => {
   const handler = () => { void act(name); };
