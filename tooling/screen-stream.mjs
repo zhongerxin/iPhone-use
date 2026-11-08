@@ -1,11 +1,17 @@
-// A single owned USB connection to WDA's independent MJPEG port. stdout is JPEG
-// stream bytes only; this program never binds a listener or touches XCTest.
+// A single owned USB (or tcp:HOST private-network) connection to WDA's independent
+// MJPEG port. stdout is JPEG stream bytes only; this program never binds a listener
+// or touches XCTest.
 import http from 'node:http';
+import net from 'node:net';
 
 // Device-library diagnostics must never corrupt the binary pipe or expose IDs.
 for (const method of ['log', 'info', 'warn', 'error', 'debug']) console[method] = () => {};
 const [udid, portArgument = '9100'] = process.argv.slice(2);
-if (!/^[A-Za-z0-9-]{8,64}$/.test(udid ?? '') || !/^\d+$/.test(portArgument)) process.exit(1);
+const networkHost = udid?.startsWith('tcp:') ? udid.slice(4) : null;
+const validTarget = networkHost !== null
+  ? /^(?:[A-Za-z0-9][A-Za-z0-9.-]{0,252}|[0-9A-Fa-f:]{2,39})$/.test(networkHost)
+  : /^[A-Za-z0-9-]{8,64}$/.test(udid ?? '');
+if (!validTarget || !/^\d+$/.test(portArgument)) process.exit(1);
 const devicePort = Number(portArgument);
 if (!Number.isInteger(devicePort) || devicePort < 1024 || devicePort > 65535) process.exit(1);
 
@@ -28,8 +34,16 @@ process.on('SIGTERM', () => stop());
 process.stdout.on('error', () => stop());
 
 try {
-  const {default: iosDevice} = await import('appium-ios-device');
-  socket = await iosDevice.utilities.connectPort(udid, devicePort);
+  if (networkHost !== null) {
+    socket = await new Promise((resolve, reject) => {
+      const tcp = net.connect({host: networkHost, port: devicePort});
+      tcp.once('connect', () => resolve(tcp));
+      tcp.once('error', reject);
+    });
+  } else {
+    const {default: iosDevice} = await import('appium-ios-device');
+    socket = await iosDevice.utilities.connectPort(udid, devicePort);
+  }
   if (stopping) socket.destroy();
   else {
     socket.setNoDelay?.(true);
