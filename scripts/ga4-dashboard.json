@@ -1,0 +1,872 @@
+{
+  "accountId": "268077887",
+  "propertyId": "559245431",
+  "dimensions": {
+    "tool": "customDimensionsGroup2Slot01",
+    "outcome": "customDimensionsGroup2Slot02",
+    "error": "customDimensionsGroup2Slot03",
+    "ready": "customDimensionsGroup2Slot04",
+    "setup_action": "customDimensionsGroup2Slot05",
+    "setup_state": "customDimensionsGroup2Slot06",
+    "screen": "customDimensionsGroup2Slot07",
+    "environment": "customDimensionsGroup2Slot08",
+    "version": "customDimensionsGroup2Slot09",
+    "platform": "customDimensionsGroup2Slot10",
+    "active": "customDimensionsGroup2Slot11",
+    "target_app_bundle_id": "customDimensionsGroup2Slot12",
+    "target_app_name": "customDimensionsGroup2Slot13",
+    "launch_source": "customDimensionsGroup2Slot14",
+    "foreground_verified": "customDimensionsGroup2Slot15"
+  },
+  "reports": [
+    {
+      "report": {
+        "id": "16139658463",
+        "name": "iPhone Use｜使用概览",
+        "description": "生产环境；UV 是匿名安装数。有效使用=成功的任务或 READY 调用，排除 setup、诊断、统计和预览。MCP 进程以首次实际调用事件计数。",
+        "cards": [
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "01｜每日有效使用安装数",
+              "type": 72,
+              "selectedDimension": [],
+              "selectedMetric": [
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot11",
+                  "evaluationType": 3,
+                  "expression": "yes",
+                  "expressionList": [
+                    "yes"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "02｜每日实际使用 MCP 进程",
+              "type": 72,
+              "selectedDimension": [],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_session_started",
+                  "expressionList": [
+                    "iphone_use_session_started"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "03｜工具调用次数",
+              "type": 3,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot01"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "04｜每日调用结果",
+              "type": 72,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot02"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "05｜每日 READY 安装数",
+              "type": 72,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot04"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot01",
+                  "evaluationType": 3,
+                  "expression": "pua_ready",
+                  "expressionList": [
+                    "pua_ready"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "06｜每日 setup 安装数",
+              "type": 72,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot05"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot01",
+                  "evaluationType": 3,
+                  "expression": "pua_setup",
+                  "expressionList": [
+                    "pua_setup"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "07｜插件版本分布（安装数）",
+              "type": 3,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot09"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 87,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "08｜预览操作次数（排除轮询）",
+              "type": 3,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot07"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot01",
+                  "evaluationType": 3,
+                  "expression": "pua_screen",
+                  "expressionList": [
+                    "pua_screen"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 87,
+                "width": 47,
+                "height": 28
+              }
+            }
+          }
+        ],
+        "reportType": 7,
+        "globalFilters": [
+          {
+            "type": 1,
+            "fieldName": "customDimensionsGroup2Slot08",
+            "evaluationType": 3,
+            "expression": "production",
+            "expressionList": [
+              "production"
+            ],
+            "complement": false,
+            "isCaseSensitive": true
+          }
+        ],
+        "layoutType": 1
+      },
+      "associatedCards": [],
+      "associatedCardsToDelete": []
+    },
+    {
+      "report": {
+        "id": "16139666921",
+        "name": "iPhone Use｜稳定性与接入",
+        "description": "生产环境；success/pending/error 都计入结果分布。READY 和 setup 按调用结果统计；setup 状态不是后台任务完成率。平均耗时=工具总耗时/调用数。",
+        "cards": [
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "01｜工具结果占比（含 pending）",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot02"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "02｜错误类别与次数",
+              "type": 3,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot03"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                },
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot02",
+                  "evaluationType": 3,
+                  "expression": "error",
+                  "expressionList": [
+                    "error"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "03｜每日失败调用",
+              "type": 72,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot01"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                },
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot02",
+                  "evaluationType": 3,
+                  "expression": "error",
+                  "expressionList": [
+                    "error"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "04｜READY 连接状态",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot04"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot01",
+                  "evaluationType": 3,
+                  "expression": "pua_ready",
+                  "expressionList": [
+                    "pua_ready"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "05｜setup 各动作调用次数",
+              "type": 3,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot05"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot01",
+                  "evaluationType": 3,
+                  "expression": "pua_setup",
+                  "expressionList": [
+                    "pua_setup"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "06｜setup 状态分布",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot06"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot01",
+                  "evaluationType": 3,
+                  "expression": "pua_setup",
+                  "expressionList": [
+                    "pua_setup"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "07｜各工具平均耗时（毫秒）",
+              "type": 3,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot01"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "calculatedMetric:16139618100"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 0,
+                "y": 87,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "08｜每日遇错安装数",
+              "type": 72,
+              "selectedDimension": [],
+              "selectedMetric": [
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [
+                {
+                  "type": 1,
+                  "fieldName": "eventName",
+                  "evaluationType": 3,
+                  "expression": "iphone_use_tool_called",
+                  "expressionList": [
+                    "iphone_use_tool_called"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                },
+                {
+                  "type": 1,
+                  "fieldName": "customDimensionsGroup2Slot02",
+                  "evaluationType": 3,
+                  "expression": "error",
+                  "expressionList": [
+                    "error"
+                  ],
+                  "complement": false,
+                  "isCaseSensitive": true
+                }
+              ],
+              "positioning": {
+                "x": 48,
+                "y": 87,
+                "width": 47,
+                "height": 28
+              }
+            }
+          }
+        ],
+        "reportType": 7,
+        "globalFilters": [
+          {
+            "type": 1,
+            "fieldName": "customDimensionsGroup2Slot08",
+            "evaluationType": 3,
+            "expression": "production",
+            "expressionList": [
+              "production"
+            ],
+            "complement": false,
+            "isCaseSensitive": true
+          }
+        ],
+        "layoutType": 1
+      },
+      "associatedCards": [],
+      "associatedCardsToDelete": []
+    },
+    {
+      "report": {
+        "id": "16181877443",
+        "name": "iPhone Use｜App 使用分布",
+        "cards": [
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "01｜App 启动明细（次数 / 安装数）",
+              "type": 65,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot13"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                },
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 0,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "02｜App bundle ID 明细（次数 / 安装数）",
+              "type": 65,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot12"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                },
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 48,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "03｜App 启动次数占比",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot13"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 0,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "04｜App 每日启动趋势",
+              "type": 72,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot13"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 48,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "05｜单次 / batch 启动来源",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot14"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 0,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "06｜启动前台核验状态",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot15"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 48,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          }
+        ],
+        "reportType": 7,
+        "globalFilters": [
+          {
+            "fieldName": "customDimensionsGroup2Slot08",
+            "expression": "production",
+            "evaluationType": 3,
+            "complement": false,
+            "type": 1,
+            "expressionList": [
+              "production"
+            ],
+            "isCaseSensitive": true
+          },
+          {
+            "type": 1,
+            "fieldName": "eventName",
+            "evaluationType": 3,
+            "expression": "iphone_use_app_launched",
+            "expressionList": [
+              "iphone_use_app_launched"
+            ],
+            "complement": false,
+            "isCaseSensitive": true
+          }
+        ],
+        "layoutType": 1
+      },
+      "associatedCards": [],
+      "associatedCardsToDelete": []
+    }
+  ],
+  "calculatedMetrics": [
+    {
+      "id": "16139618100",
+      "apiName": "calcMetric:average_tool_duration_ms",
+      "formula": "customMetricsGroup1Slot01 / eventCount",
+      "measurementUnit": "Milliseconds"
+    }
+  ],
+  "collectionId": "16139662949",
+  "reportUrls": {
+    "usage": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139658463?params=_u..nav%3Dmaui&ruid=2155EAED-6065-415E-A58D-379B0208AC98&collectionId=16139662949",
+    "reliability": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139666921?params=_u..nav%3Dmaui&ruid=52AE58B4-1D21-4B73-9C7E-3D7C4948FC8C&collectionId=16139662949",
+    "app_usage": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16181877443?params=_u..nav%3Dmaui&ruid=A3E90B07-F923-43D4-B5B0-D0947D74DD06&collectionId=16139662949"
+  }
+}

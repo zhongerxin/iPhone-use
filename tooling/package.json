@@ -10,5 +10,8 @@
   },
   "dependencies": {
     "appium-ios-device": "3.1.24"
+  },
+  "overrides": {
+    "shell-quote": "1.11.0"
   }
 }

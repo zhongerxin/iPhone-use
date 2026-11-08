@@ -173,11 +173,27 @@ class LocalizationTests(unittest.TestCase):
         self.assertIn('<html lang="ja">', japanese[3]['contents'][0]['text'])
         self.assertIn('aria-label="ホーム画面に戻る"', japanese[3]['contents'][0]['text'])
         self.assertNotEqual(default[2]['resources'][0]['uri'], japanese[2]['resources'][0]['uri'])
+        self.assertEqual([tool['name'] for tool in default[1]['tools']],
+                         [tool['name'] for tool in japanese[1]['tools']])
         for left, right in zip(default[1]['tools'], japanese[1]['tools']):
             self.assertEqual(left['name'], right['name'])
             self.assertEqual(left['annotations'], right['annotations'])
             self.assertEqual(contract(left['inputSchema']), contract(right['inputSchema']))
             self.assertLess(len(json.dumps(right['inputSchema'], ensure_ascii=False, separators=(',', ':')).encode()), 5000)
+
+    def test_japanese_guidance_keeps_new_screenshot_and_recovery_semantics(self):
+        initialization, tools, _, _ = catalog(ROOT, 'ja')
+        published = {tool['name']: tool for tool in tools['tools']}
+        screenshot = published['pua_screenshot']
+        self.assertEqual(screenshot['inputSchema']['properties'], {})
+        self.assertIn('iPhone', screenshot['description'])
+        self.assertIn('写真', screenshot['description'])
+        self.assertIn('pua_timeout', initialization['instructions'])
+        self.assertIn('recovery.max_wait_retries', initialization['instructions'])
+        self.assertIn('transport_error', initialization['instructions'])
+        observe = published['pua_observe']['inputSchema']['properties']
+        self.assertIn('不完全', observe['snapshot_max_depth']['description'])
+        self.assertIn('可視行', observe['snapshot_max_children']['description'])
 
     def test_source_package_builds_japanese_without_changing_canonical_files(self):
         with tempfile.TemporaryDirectory() as directory:

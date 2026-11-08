@@ -31,6 +31,10 @@ App 实际要求密码、PIN、验证码、Face ID / Touch ID，或手机需要�
 
 树的每个节点只保留一份事实：`type` 不带 `XCUIElementType` 前缀，`rect` 是 `[x, y, width, height]`（iPhone 点）；没有 `name` 表示它与 `label` 相同，没有 `value` 表示它与文字相同，没有 `enabled` / `visible` / `in_viewport` 表示为 true。保持 `include_invisible=false`、`max_nodes=200`、`expensive_visibility=false`；只查一个目标用 `pua_find` / `pua_wait`，不重复获取整树。树截断或节点在视口内不能证明内容全量或目标未被遮挡，固定表头和浮层可能盖住它。
 
+原生 AX 快照默认深度为 50，子节点数量保持原生默认、不额外限制。模型可按当前任务在独立 `pua_observe(mode="tree" / "both", snapshot_max_depth=...)` 设置 1..62 的单次深度；低深度可能省略可见文字或控件，不能用缺失节点或 `truncated=false` 证明目标不存在。截图中所需信息在树里缺失时，回到 50 重读并按任务范围核对。显式深度成功后恢复会话默认 50；超时或进程中断时记录待恢复设置，在后续原生查询 / 动作前恢复。普通观察、动作后的观察及列表采集默认都使用 50。
+
+微信通讯录 / 会话列表读取慢时，按需读取 [微信长列表说明](references/wechat.md)；微博「消息 → 动态」慢时读取 [微博动态说明](references/weibo.md)。其他 App 的慢树、输出截断或可见文字缺失，按需读取 [App 场景与增补方法](references/app-snapshots.md)，区分深度、输出预算和自绘缺标签；新增 `references/<app>.md` 后补按需入口，不把单个页面的参数改成全局默认。
+
 自绘内容、遮挡或缺失标签需要视觉判断时才取截图。截图随同一结果以图片返回，已缩放到适合阅读的尺寸：图像像素乘以 `image.pixel_to_point` 的 `[x, y]` 得到 iPhone 点，不要按原始分辨率或 Mac 屏幕换算。screenshot 跳过 XML；both 同时提供树和图。若 App 出现分享浮层，处理当前状态，不循环重复同一路径截图。
 
 ## 界面异常时先看截图，再决定操作
@@ -61,6 +65,8 @@ for (const block of result.content ?? []) {
 
 ## App 与常规动作
 
+需要在手机里发送、上传或使用当前画面的截图时，先调用 `pua_screenshot()` 触发 iOS 系统截屏并保存到手机相册，再在 iPhone「照片」App 或目标 App 的相册选择器中找到并使用，核对最终结果。`pua_observe(mode="screenshot")` 仅供模型观察，不保存到手机相册；这类任务不要转到 Mac 截图、剪贴板或网页传图。
+
 需要把手机中的图片、视频或其他文件传回 Mac 使用时，参照 [AirDrop 文件传回 Mac](references/airdrop.md)，发送后到下载目录找到文件即可使用。
 
 已知并核验过的 bundle ID 可直接 launch；需要离线查常用 App 时用 `pua_apps(source="catalog", query=...)` 或 [常用 App 目录](references/apps.md)。未知或同名 App 用 `source="auto"` 查本机候选，仍无结果才查 Apple。不要连续猜 ID；招商银行主应用为 `com.cmbchina.MPBBank`。商店或目录记录不证明本机安装，`installed_verified=true` 才是安装证据。启动后准备下一步的观察会同时显示实际前台，不额外增加默认前台验收。
@@ -77,7 +83,7 @@ for (const block of result.content ?? []) {
 
 直接用 `pua_type_text(selector, text)` 一次给出用户需要的完整内容，不先写测试短文本或 ASCII，也不自行拆段。selector 找不到输入框时不换写法重试：用坐标点中输入框，再调用不带 selector 的 `pua_type_text(text=...)` 向当前焦点输入。默认 `replace=true, allow_newlines=false, submit=false, verify=false, observe="none"`；普通搜索、筛选等输入后可接着做下一步，未知下一页面时在本次动作返回观察并顺带判断。需要保留已有草稿时按当前内容决定替换或追加；关键最终文本可显式 `verify=true` 核对完整字段。密码、手机解锁码和验证码由用户输入。
 
-长文本由工具分段输入。结果为 `input_complete=false` 时文本还没输完：只带返回的 `continue_token` 再调用一次 `pua_type_text`，不重发文本、不附其他参数，期间不要点击、滑动或切页；全部输完后原调用里的 verify / submit / expect / observe 才执行。续传失效（`input_continuation_expired`）时不会输入任何内容，先读取字段的实际文字，再用 `replace=false` 只补缺少的部分。输入中途报错附带 `characters_confirmed`，同样先回读，不整段重输。
+长文本由工具分段输入。结果为 `input_complete=false` 时文本还没输完：只带返回的 `continue_token` 再调用一次 `pua_type_text`，不重发文本、不附其他参数，期间不要点击、滑动或切页；全部输完后原调用里的 verify / submit / expect / observe 才执行。续传前会重新确认原 App、会话和输入框焦点；上下文变化或无法读取时使 token 失效，不自动切回或重输。续传失效（`input_continuation_expired`）时不会输入任何内容，先定位原本要输入的字段并读取实际文字，再用 `replace=false` 只补缺少的部分，不能向另一个 App 或输入框补写。输入中途报错附带 `characters_confirmed`，同样先回读，不整段重输。
 
 多行内容可能在聊天控件里触发 Return 发送。只有确知当前 TextView 是合适的多行编辑器时才设置 `allow_newlines=true`；不能暗中把用户要求的格式改成单行。允许换行不等于授权发送。用户已授权发送时，在发送前的一次观察或显式输入验收中核对目标会话和完整草稿，再发送一次；发送后核对最终内容和发送次数。`submit=true` 不证明提交结果，提交后以真实结果页 / 记录验收。明确未发送才补做，不根据 timeout、未单独验证或普通 `verified=false` 自动重发。
 

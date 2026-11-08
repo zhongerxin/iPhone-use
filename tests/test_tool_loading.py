@@ -93,7 +93,7 @@ class ToolLoadingTests(unittest.TestCase):
             self.assertNotRegex(body, r"(?i)\bwda\b|wda_")
             for reference in re.findall(r"pua_[a-z_]+", body):
                 self.assertTrue(reference in public_names or reference in {
-                    "pua_unreachable", "pua_foreground_unavailable", "pua_recovery_required"
+                    "pua_unreachable", "pua_timeout", "pua_transport_error", "pua_foreground_unavailable", "pua_recovery_required"
                 }, f"{document.relative_to(ROOT)}: {reference}")
 
     def test_every_published_schema_fits_before_host_compaction(self):

@@ -9,7 +9,7 @@ description: PUA（Phone Use Agent）を設定し、ユーザー自身のiPhone�
 
 ## 現在の状態を調べる
 
-このチャットでREADYを取得していなければ、先に`pua_setup(action="status")`を呼び、下の手順で正常なサービスか活動中のジョブを再利用する。必要なサービスがなければstartを一度だけ呼ぶ。サービスが使える状態になってから`pua_ready(recover=true, screenshot=false)`を呼び、操作前に確認する。READYの失敗を待ってからsetupを始めない。以前のチャットのREADYやプラグイン導入を証拠にしない。このチャットですでにREADYで接続が正常なら、doctor／discover／build／startを繰り返さない。初回設定や具体的な不足がある場合は`pua_doctor`と`pua_setup(action="discover")`でXcode、接続端末、署名、ポート、プロセスを調べる。複数端末はユーザーの指定に従い、条件に合う端末が1台だけならそれを使う。UDID、Team ID、ログ、署名設定はユーザーのMacに保存し、ソースやGitに入れない。
+このチャットでREADYを取得していなければ、先に`pua_setup(action="status")`を呼び、下の手順で正常なサービスか活動中のジョブを再利用する。サービス停止を確認でき、対応する活動ジョブがない場合だけstartを一度呼ぶ。サービスが使える状態になってから`pua_ready(recover=true, screenshot=false)`を呼び、操作前に確認する。READYの失敗を待ってからsetupを始めない。以前のチャットのREADYやプラグイン導入を証拠にしない。このチャットですでにREADYで接続が正常なら、doctor／discover／build／startを繰り返さない。初回設定や具体的な不足がある場合は`pua_doctor`と`pua_setup(action="discover")`でXcode、接続端末、署名、ポート、プロセスを調べる。複数端末はユーザーの指定に従い、条件に合う端末が1台だけならそれを使う。UDID、Team ID、ログ、署名設定はユーザーのMacに保存し、ソースやGitに入れない。
 
 通常は`recover=true`または省略する。falseは明示的な再起動禁止・読み取り専用診断に限る。画像が不要なら`screenshot=false`。READYのproofはstatus、利用可能なsession、実際の前面アプリ、viewport、ロック解除、現在のobservationを含む。その観察を次に使い、直後のobserveや移動テストを重ねない。ミラーリングが動作中でツリーが空なら`mirroring_conflict`となり、ミラーリングを終了して再確認する。Runnerアイコン、BUILD SUCCEEDED、開いたポートだけではREADYではない。
 
@@ -19,12 +19,16 @@ READYは対応ホストで画面サイドバーも開く。閉じた画面の再
 
 ## サービス未起動なら初期化を続ける
 
+先にリクエストのtimeoutと接続失敗を区別する。`pua_timeout`は端末側の処理が続いている可能性がある。READY失敗なら返された`retry_after_seconds`（現在2秒）だけホスト側で待ち、同じ引数でREADYを再試行する。遅延試行は最大2回で、なおtimeoutなら`pua_setup(action="status")`でサービス・ジョブ・ログを診断し、直接start／recoverしない。通常観察・操作後観察のtimeoutも待ってから画像を1回取得し、遅延観察を最大2回試してから診断する。`pua_wait`は要素照会を増やすため待機に使わず、遅いツリー照会や業務操作を再実行しない。timeoutの繰り返し自体は再起動の許可ではない。
+
+`pua_unreachable`は接続拒否、reset、pipe切断、EOFなどHTTP接続の失敗で、USBが抜けた証拠ではない。`pua_transport_error`はその他の通信・プロトコル異常なので具体的に診断する。`action_uncertain`は実行結果が不確実な状態を保つ。`transport_error`とrecoveryに従って待機・接続確認を行い、実際の状態を観察してから残りを続ける。不確実な入力・送信を繰り返さない。
+
 `recover=true`は、所有者を確認したサービスの継続する`local.pid.0`／XCTest障害を復旧できるが、初回設定やコールドスタートを自動完了しない。`pua_unreachable`、接続拒否、`not_ready`なら以下を続ける。
 
 1. `pua_setup(action="status")`で`configured`、`service`、`jobs`を読む。configured=trueなら既存の端末・署名・ポートを保持する。falseの場合だけ不足を初回手順で補う。
 2. 現在の設定／endpointに合うstart／recoverがqueuedまたはrunningなら同じidを記録して`pua_setup(action="status", job_id=..., wait_seconds=20)`で待つ。statusは`jobs`配列を返すためidで選ぶ。無関係な古いジョブを待たない。対応するfetch／buildが実行中ならそれも再利用する。
 3. `service.ready=true`でもsession／前面／viewportをREADYで確認する。startがrunningでもサービスが使えればREADYへ進む。recoverは`recovery_phase="serving"`になってからREADY。長期動作するRunnerのsucceededを待たない。
-4. 設定済み、サービス停止、対応する活動ジョブなしなら`pua_setup(action="start")`を一度呼んで有効なビルドを使う。startは最大20秒待ち、サービスが使える状態かジョブの終了を確認したら早く返る。固定のsleepではない。`service.ready=true`ならstatusを重ねずREADYへ進む。未完了なら、新しい`job_id`またはalready_running=trueの`job.id`を記録し、`pua_setup(action="status", job_id=..., wait_seconds=20)`で同じジョブを待つ。タイムアウト後もジョブは続くためstartを重ねない。ソース不足を明示された場合だけfetch、有効なビルド不足・署名期限切れ・バイナリー非互換ならbuildしてからstart。失敗は正確なログとnext_stepsから処理し、startのループを作らない。
+4. 設定済み、サービス停止を確認済み、対応する活動ジョブなしなら`pua_setup(action="start")`を一度呼んで有効なビルドを使う。サービス確認のtimeoutやservice.ready=falseだけでは停止を証明しないため、診断とログで確認する。startは最大20秒待ち、サービスが使える状態かジョブの終了を確認したら早く返る。固定のsleepではない。`service.ready=true`ならstatusを重ねずREADYへ進む。未完了なら、新しい`job_id`またはalready_running=trueの`job.id`を記録し、`pua_setup(action="status", job_id=..., wait_seconds=20)`で同じジョブを待つ。タイムアウト後もジョブは続くためstartを重ねない。ソース不足を明示された場合だけfetch、有効なビルド不足・署名期限切れ・バイナリー非互換ならbuildしてからstart。失敗は正確なログとnext_stepsから処理し、startのループを作らない。
 5. READYになったらその観察から元の作業を続ける。USB、Xcode、署名、権限の実際の障害を処理する。本人の信頼・ログイン・解除が必要なら先頭選択肢「完了したので続けてください」の質問ツールを使う。読み取り専用や再起動禁止を初期化で迂回しない。
 
 既存ウィジェットを再利用する。ユーザーが先に画面表示を求めた場合は、未表示なら`pua_screen()`を呼び、初期化と許可済み作業を続ける。明示されていない承認待ちを追加しない。未起動の空白は全作業の失敗ではない。
@@ -44,9 +48,9 @@ READYは対応ホストで画面サイドバーも開く。閉じた画面の再
 
 READYの端末、session、viewport、observationをそのまま使う。通常の操作は`observe="none", verify=false`、次に必要な未知ページはその操作でtree／screenshot／bothを返す。重要な最終結果をexpect／verifyまたは最終読み取りで確認する。
 
-アプリ認証は[引き継ぎガイド](../iphone-use/references/authentication.ja.md)に従ってpause、質問、実際の完了回答、resume、新しい観察の順で進める。アプリ認証だけでbuild／start／recoverを繰り返さない。実際のロックや切断の場合にREADYを復旧する。ユーザー引き継ぎ後は古い座標を使わず現在のアプリを読む。
+認証pauseはUSBの取得を止め、ウィジェットは停止直前の画面と引き継ぎ用の半透明オーバーレイを表示する。アプリ認証は[引き継ぎガイド](../iphone-use/references/authentication.ja.md)に従ってpause、質問、実際の完了回答、resume、新しい観察の順で進める。アプリ認証だけでbuild／start／recoverを繰り返さない。実際のロックや切断の場合にREADYを復旧する。timeoutは先に遅延再試行・観察を行い、切断と同一視しない。その他の通信異常は診断に従う。ユーザー引き継ぎ後は古い座標を使わず現在のアプリを読む。
 
-切断、再起動、テスト停止、USB転送終了では上のstatus手順で既存ジョブとビルドを再利用する。具体的な不足があるときだけdoctorを使い、足りない層を修復してREADYを確認する。
+接続失敗、再起動、テスト停止、USB転送終了では上のstatus手順で既存ジョブとビルドを再利用する。具体的な不足があるときだけdoctorを使い、足りない層を修復してREADYを確認する。
 
 `XCTDaemonErrorDomain Code=41`、`local.pid.0`、`pua_foreground_unavailable`は接続障害。`pua_ready(screenshot=false)`はsessionの再作成と再読を1回行い、持続時だけ設定、endpoint、worker、待受ポートの所有者を確認したプラグインのサービスを背景復旧する。操作は再実行しない。recoveringは同じrecovery.job_idを追い、servingでREADY。recovery_requiredは復旧禁止のため、指示が許すときだけtrueで再呼び出し。`pua_recovery_required`の冷却・所有者・ビルドの理由に従い、ポート番号だけでプロセスを停止しない。[接続の復旧](references/recovery.ja.md)を参照する。
 

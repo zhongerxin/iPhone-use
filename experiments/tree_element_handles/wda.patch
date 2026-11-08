@@ -1,0 +1,206 @@
+diff --git a/WebDriverAgentLib/Categories/XCUIElement+FBCaching.h b/WebDriverAgentLib/Categories/XCUIElement+FBCaching.h
+index 119723a..a51c0f1 100644
+--- a/WebDriverAgentLib/Categories/XCUIElement+FBCaching.h
++++ b/WebDriverAgentLib/Categories/XCUIElement+FBCaching.h
+@@ -12,7 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
+ 
+ @interface XCUIElement (FBCaching)
+ 
+-@property (nonatomic, readonly) NSString *fb_cacheId;
++@property (nonatomic, copy) NSString *fb_cacheId;
+ 
+ @end
+ 
+diff --git a/WebDriverAgentLib/Categories/XCUIElement+FBCaching.m b/WebDriverAgentLib/Categories/XCUIElement+FBCaching.m
+index c2e9f11..379a4bc 100644
+--- a/WebDriverAgentLib/Categories/XCUIElement+FBCaching.m
++++ b/WebDriverAgentLib/Categories/XCUIElement+FBCaching.m
+@@ -21,6 +21,11 @@ @implementation XCUIElement (FBCaching)
+ 
+ @dynamic fb_cacheId;
+ 
++- (void)setFb_cacheId:(NSString *)cacheId
++{
++  objc_setAssociatedObject(self, &XCUIELEMENT_CACHE_ID_KEY, cacheId.copy, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++}
++
+ - (NSString *)fb_cacheId
+ {
+   id result = objc_getAssociatedObject(self, &XCUIELEMENT_CACHE_ID_KEY);
+diff --git a/WebDriverAgentLib/Commands/FBDebugCommands.m b/WebDriverAgentLib/Commands/FBDebugCommands.m
+index 42ea74b..98afd0b 100644
+--- a/WebDriverAgentLib/Commands/FBDebugCommands.m
++++ b/WebDriverAgentLib/Commands/FBDebugCommands.m
+@@ -14,6 +14,14 @@
+ #import "XCUIApplication+FBHelpers.h"
+ #import "XCUIElement+FBUtilities.h"
+ #import "FBXPath.h"
++#import "FBElementCache.h"
++#import "FBXCElementSnapshotWrapper.h"
++#import "XCUIElement+FBUID.h"
++#import "XCUIElement+FBWebDriverAttributes.h"
++#import "XCUIElement.h"
++#import "XCUIElementQuery.h"
++#import "FBXCodeCompatibility.h"
++#include <math.h>
+ 
+ @implementation FBDebugCommands
+ 
+@@ -25,6 +33,7 @@ + (NSArray *)routes
+   @[
+     [[FBRoute GET:@"/source"] respondWithTarget:self action:@selector(handleGetSourceCommand:)],
+     [[FBRoute GET:@"/source"].withoutSession respondWithTarget:self action:@selector(handleGetSourceCommand:)],
++    [[FBRoute GET:@"/wda/sourceWithHandles"] respondWithTarget:self action:@selector(handleGetSourceWithHandles:)],
+     [[FBRoute GET:@"/wda/accessibleSource"] respondWithTarget:self action:@selector(handleGetAccessibleSourceCommand:)],
+     [[FBRoute GET:@"/wda/accessibleSource"].withoutSession respondWithTarget:self action:@selector(handleGetAccessibleSourceCommand:)],
+   ];
+@@ -78,4 +87,112 @@ + (NSArray *)routes
+   return FBResponseWithObject(application.fb_accessibilityTree ?: @{});
+ }
+ 
+++ (void)appendSnapshot:(id<FBXCElementSnapshot>)snapshot
++             viewport:(CGRect)viewport
++                nodes:(NSMutableArray *)nodes
++            snapshots:(NSMutableArray *)snapshots
++              visited:(NSUInteger *)visited
++{
++  *visited += 1;
++  FBXCElementSnapshotWrapper *wrapped = [FBXCElementSnapshotWrapper ensureWrapped:snapshot];
++  NSString *type = wrapped.wdType;
++  CGRect frame = snapshot.frame;
++  NSString *name = wrapped.wdName ?: @"";
++  NSString *label = wrapped.wdLabel ?: @"";
++  id value = wrapped.wdValue;
++  BOOL meaningful = name.length > 0 || label.length > 0 || (nil != value && ![value isEqual:@""]);
++  BOOL finite = isfinite(frame.origin.x) && isfinite(frame.origin.y) && isfinite(frame.size.width) && isfinite(frame.size.height);
++  BOOL inViewport = finite && !CGRectIsEmpty(frame) && !CGRectIsNull(CGRectIntersection(frame, viewport));
++  BOOL container = [type isEqualToString:@"XCUIElementTypeApplication"] || [type isEqualToString:@"XCUIElementTypeWindow"];
++  if (meaningful && inViewport && !container) {
++    NSMutableDictionary *node = [NSMutableDictionary dictionaryWithDictionary:@{
++      @"type": [type stringByReplacingOccurrencesOfString:@"XCUIElementType" withString:@""],
++      @"rect": @[@(frame.origin.x), @(frame.origin.y), @(frame.size.width), @(frame.size.height)],
++      @"enabled": @(wrapped.isWDEnabled),
++    }];
++    if (name.length > 0) { node[@"name"] = name; }
++    if (label.length > 0) { node[@"label"] = label; }
++    if (nil != value) { node[@"value"] = value; }
++    [nodes addObject:node];
++    [snapshots addObject:snapshot];
++  }
++  for (id<FBXCElementSnapshot> child in snapshot.children) {
++    [self appendSnapshot:child viewport:viewport nodes:nodes snapshots:snapshots visited:visited];
++  }
++}
++
+++ (id<FBResponsePayload>)handleGetSourceWithHandles:(FBRouteRequest *)request
++{
++  NSString *budget = request.parameters[@"max_nodes"] ?: @"200";
++  NSScanner *scanner = [NSScanner scannerWithString:budget];
++  NSInteger maximum;
++  if (![scanner scanInteger:&maximum] || !scanner.isAtEnd || maximum < 1 || maximum > 500) {
++    return FBResponseWithStatus([FBCommandStatus invalidArgumentErrorWithMessage:@"max_nodes must be between 1 and 500" traceback:nil]);
++  }
++  BOOL registerHandles = ![request.parameters[@"register_handles"] isEqualToString:@"false"];
++  XCUIApplication *application = request.session.activeApplication;
++  NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
++  NSLog(@"TREE_HANDLES snapshot begin");
++  id<FBXCElementSnapshot> root = [application fb_standardSnapshot];
++  NSTimeInterval snapshotFinished = NSProcessInfo.processInfo.systemUptime;
++  NSMutableArray *nodes = [NSMutableArray array];
++  NSMutableArray *snapshots = [NSMutableArray array];
++  NSUInteger visited = 0;
++  [self appendSnapshot:root viewport:root.frame nodes:nodes snapshots:snapshots visited:&visited];
++  NSUInteger eligible = nodes.count;
++  if (nodes.count > maximum) {
++    [nodes removeObjectsInRange:NSMakeRange(maximum, nodes.count - maximum)];
++    [snapshots removeObjectsInRange:NSMakeRange(maximum, snapshots.count - maximum)];
++  }
++  NSTimeInterval filtered = NSProcessInfo.processInfo.systemUptime;
++  // Keep registration lazy; resolving the UID query happens on live use.
++  XCUIElementQuery *query = [application descendantsMatchingType:XCUIElementTypeAny];
++  BOOL supported = [query respondsToSelector:@selector(matchingPredicate:)];
++  NSUInteger registered = 0;
++  NSUInteger registrationFailures = 0;
++  NSMutableSet *seen = [NSMutableSet set];
++  NSLog(@"TREE_HANDLES registration begin output=%lu", (unsigned long)nodes.count);
++  for (NSUInteger index = 0; index < nodes.count; index++) {
++    id<FBXCElementSnapshot> snapshot = snapshots[index];
++    NSString *uid = [FBXCElementSnapshotWrapper wdUIDWithSnapshot:snapshot];
++    NSMutableDictionary *node = nodes[index];
++    if (uid.length == 0) { continue; }
++    node[@"native_uid"] = uid;
++    if (!registerHandles || !supported) { continue; }
++    if (![seen containsObject:uid]) {
++      @try {
++        NSPredicate *predicate = [NSPredicate predicateWithFormat:@"fb_uid == %@", uid];
++        XCUIElement *element = [query matchingPredicate:predicate].element;
++        if (![element isKindOfClass:XCUIElement.class]) {
++          registrationFailures += 1;
++          continue;
++        }
++        element.lastSnapshot = snapshot;
++        [request.session.elementCache storeElement:element withKnownUUID:uid];
++        [seen addObject:uid];
++        registered += 1;
++      } @catch (NSException *exception) {
++        registrationFailures += 1;
++        continue;
++      }
++    }
++    node[@"element_id"] = uid;
++  }
++  NSTimeInterval finished = NSProcessInfo.processInfo.systemUptime;
++  NSDictionary *timings = @{
++    @"snapshot_seconds": @(snapshotFinished - started),
++    @"filter_seconds": @(filtered - snapshotFinished),
++    @"registration_seconds": @(finished - filtered),
++    @"total_seconds": @(finished - started),
++  };
++  NSLog(@"TREE_HANDLES end visited=%lu output=%lu registered=%lu timings=%@", (unsigned long)visited, (unsigned long)nodes.count, (unsigned long)registered, timings);
++  return FBResponseWithObject(@{
++    @"nodes": nodes, @"total_nodes": @(visited), @"eligible_nodes": @(eligible),
++    @"truncated": @(eligible > maximum), @"registered_handles": @(registered),
++    @"registration_failures": @(registrationFailures),
++    @"handle_api_supported": @(supported), @"binding": @"uid_predicate", @"timings": timings,
++    @"viewport": @[@(root.frame.origin.x), @(root.frame.origin.y), @(root.frame.size.width), @(root.frame.size.height)],
++  });
++}
++
+ @end
+diff --git a/WebDriverAgentLib/Routing/FBElementCache.h b/WebDriverAgentLib/Routing/FBElementCache.h
+index 1c7eb47..b3006cd 100644
+--- a/WebDriverAgentLib/Routing/FBElementCache.h
++++ b/WebDriverAgentLib/Routing/FBElementCache.h
+@@ -29,6 +29,9 @@ extern const int ELEMENT_CACHE_SIZE;
+  */
+ - (nullable NSString *)storeElement:(XCUIElement *)element;
+ 
++// Register identity already obtained from the observation snapshot.
++- (nullable NSString *)storeElement:(XCUIElement *)element withKnownUUID:(NSString *)uuid;
++
+ /**
+  Returns cached element resolved with default snapshot attributes
+ 
+diff --git a/WebDriverAgentLib/Routing/FBElementCache.m b/WebDriverAgentLib/Routing/FBElementCache.m
+index 7566242..03e9b5b 100644
+--- a/WebDriverAgentLib/Routing/FBElementCache.m
++++ b/WebDriverAgentLib/Routing/FBElementCache.m
+@@ -56,6 +56,18 @@ - (XCUIElement *)elementForUUID:(NSString *)uuid
+   return [self elementForUUID:uuid checkStaleness:NO];
+ }
+ 
++- (NSString *)storeElement:(XCUIElement *)element withKnownUUID:(NSString *)uuid
++{
++  if (nil == element || uuid.length == 0) {
++    return nil;
++  }
++  element.fb_cacheId = uuid;
++  @synchronized (self.elementCache) {
++    [self.elementCache setObject:element forKey:uuid];
++  }
++  return uuid;
++}
++
+ - (XCUIElement *)elementForUUID:(NSString *)uuid checkStaleness:(BOOL)checkStaleness
+ {
+   if (!uuid) {

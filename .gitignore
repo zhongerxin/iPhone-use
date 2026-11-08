@@ -16,6 +16,7 @@ WebDriverAgent/
 .env.*
 config.local.json
 posthog.local.json
+ga4.local.json
 *.jsonl
 
 # Local experiments are excluded from Git and release packages.

@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-task_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+task_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 task_language=default
 if [ "$#" -gt 0 ]; then
     if [ "$#" -ne 2 ] || [ "$1" != "--language" ]; then

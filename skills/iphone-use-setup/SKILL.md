@@ -17,12 +17,16 @@ description: 配置 PUA（Phone Use Agent），在用户自己的 iPhone 上安�
 
 ## 服务未启动时继续初始化
 
-`recover=true` 对持久 `local.pid.0` / XCTest 故障可排队恢复已核验归属的服务；它不代表自动完成首次配置或冷启动。READY 的 `pua_unreachable`、连接拒绝、`not_ready` 等未启动结果，应进入以下启动分支，不能直接 final 宣布手机任务失败：
+先区分请求超时和连接失败。READY 返回 `pua_timeout` 时，按返回的 `retry_after_seconds` 在宿主侧等待（当前为 2 秒），再用相同参数重试 READY；最多两次延迟尝试，仍超时只调用 `pua_setup(action="status")` 检查服务、工作和日志，不直接 start / recover。不要用 `pua_wait` 代替等待或立即重读树，手机端原请求可能仍在执行。普通观察 / 动作后观察超时同样先等待，再取一次 screenshot；最多两次延迟观察后只诊断，不重放动作。重复超时本身不授权重启。
+
+`pua_unreachable` 表示 HTTP 通道连接拒绝、重置、管道关闭或 EOF 等连接失败，不直接证明 USB 已拔出；`pua_transport_error` 表示其他传输或协议异常，按具体细节诊断，不统一当成断连。动作的 `action_uncertain` 保留执行不确定性，按 `transport_error` 和 recovery 处理后先观察真实状态，不重发输入、提交或其他业务动作。
+
+`recover=true` 对持久 `local.pid.0` / XCTest 故障可排队恢复已核验归属的服务；它不代表自动完成首次配置或冷启动。READY 的 `pua_unreachable`、连接拒绝、`not_ready` 等连接 / 未启动结果，应进入以下检查分支，不能直接 final 宣布手机任务失败：
 
 1. 调用 `pua_setup(action="status")`。返回 `configured=true` 时保留现有设备、签名和端口配置；`configured=false` 才按下节首次安装流程补实际缺项。
 2. 检查返回 `jobs` 数组。已有与当前配置 / endpoint 对应的 start / recover 工作为 queued 或 running 时按其 `id` 查询同一工作，不重复 start，也不等待旧的无关工作；有对应 fetch / build 工作正在运行时也先复用它。`pua_setup(action="status", job_id=...)` 仍返回 `jobs` 数组，不能假定返回单个 job。
 3. `service.ready=true` 表示服务可探测，仍需重新 READY 验证 session / 前台 / 视口等完整通道。start 工作仍 running 且服务可用即可验 READY；recover 工作到 `recovery_phase="serving"` 后验 READY，长期 Runner 不等 succeeded。
-4. 已配置、服务未运行且没有对应活动工作时，调用一次 `pua_setup(action="start")` 复用有效构建。start 默认有界等待最多 20 秒，服务就绪或工作结束时提前返回；不是固定 sleep。返回 `service.ready=true` 时直接 READY，无需再查 status。尚未就绪时用 `pua_setup(action="status", job_id=..., wait_seconds=20)` 等待同一工作，超时只表示仍在启动，不能再次 start。新工作记录返回的 `job_id`；`already_running=true` 时记录 `job.id`，需要等待时用 `pua_setup(action="status", job_id=..., wait_seconds=20)` 查询同一工作。start 明确报告源代码缺失时 fetch，明确报告有效构建缺失、签名过期或二进制不兼容时 build，然后继续 start；不因冷启动先完整重装或重新签名。工作失败时查看该工作准确日志和 next_steps，再处理真实缺项，不能循环 start。
+4. 已配置、确认服务未运行且没有对应活动工作时，调用一次 `pua_setup(action="start")` 复用有效构建。探测超时或单独的 `service.ready=false` 不证明服务已停止，先按诊断和日志确认。start 默认有界等待最多 20 秒，服务就绪或工作结束时提前返回；不是固定 sleep。返回 `service.ready=true` 时直接 READY，无需再查 status。尚未就绪时用 `pua_setup(action="status", job_id=..., wait_seconds=20)` 等待同一工作，超时只表示仍在启动，不能再次 start。新工作记录返回的 `job_id`；`already_running=true` 时记录 `job.id`，需要等待时用 `pua_setup(action="status", job_id=..., wait_seconds=20)` 查询同一工作。start 明确报告源代码缺失时 fetch，明确报告有效构建缺失、签名过期或二进制不兼容时 build，然后继续 start；不因冷启动先完整重装或重新签名。工作失败时查看该工作准确日志和 next_steps，再处理真实缺项，不能循环 start。
 5. 取得 `ready=true` 后复用当前 observation，继续原任务。只有真实 USB / Xcode / 签名 / 权限阻塞才需要对应处理；必须用户本人解锁、信任、登录或确认时，用首个选项「已完成继续」的宿主提问流程。用户明确要求只读、禁止启动 / 重启时保留限制，不通过初始化绕过。
 
 本聊天已有 widget 时，重跑 setup、启动 / 恢复通道和再次 READY 均复用已有面板，不再额外调用 `pua_screen()` 打开新标签。用户只要求“先打开 widget 让我看”且面板尚未打开时，调用 `pua_screen()` 打开预览后继续初始化与已授权任务，不添加等待批准的关卡；用户明确要求先等确认则照做。未启动时预览暂时空白不证明 READY，也不表示整个任务已失败。
@@ -42,9 +46,9 @@ description: 配置 PUA（Phone Use Agent），在用户自己的 iPhone 上安�
 
 READY 已返回设备、会话、视口和当前 observation，复用这些信息准备下一步。不要紧接着重复读树或为每项任务增加导航预检；只有具体诊断确实需要时才在无副作用页面测试。常规导航默认 observe=none、verify=false；下一步需要未知页面信息时，在本次动作返回 tree / screenshot / both，不另加验证回合。最终关键操作显式 expect / verify 或一次终态读取。
 
-通道 READY 后，目标 App 仍可能要求密码、验证码或 Face ID。按 [认证接管与恢复](../iphone-use/references/authentication.md)，先调用 `pua_screen(action="pause")` 停止预览并清空画面，再按该参考调用提问工具提示用户在 iPhone 上完成，首个选项「已完成继续」；接管期间暂停手机调用。收到用户实际选择「已完成继续」或明确完成通知后调用 `pua_screen(action="resume")`，重新观察 App 和目标页。App 认证不是 PUA 故障，不为此重复 build / start / recover；手机真正锁屏或通道中断时才恢复 READY。
+通道 READY 后，目标 App 仍可能要求密码、验证码或 Face ID。按 [认证接管与恢复](../iphone-use/references/authentication.md)，先调用 `pua_screen(action="pause")` 停止预览采集；widget 保留暂停前的画面并显示接管遮罩，再按该参考调用提问工具提示用户在 iPhone 上完成，首个选项「已完成继续」；接管期间暂停手机调用。收到用户实际选择「已完成继续」或明确完成通知后调用 `pua_screen(action="resume")`，重新观察 App 和目标页。App 认证不是 PUA 故障，不为此重复 build / start / recover；手机真正锁屏或通道中断时才恢复 READY。
 
-断线、重启、停止测试进程或 USB 转发退出后，按上面的未启动流程查询 status 并复用已有工作 / 构建；只有具体缺项需要时才调用 doctor，按缺失层恢复连接或 start，最后重新 READY。用户接管手机后重新观察当前 App，不继续使用接管前的坐标或猜测原页面。
+连接失败、重启、停止测试进程或 USB 转发退出后，按上面的检查流程查询 status 并复用已有工作 / 构建；只有具体缺项需要时才调用 doctor，按缺失层恢复连接或 start，最后重新 READY。请求超时仍先走延迟重试 / 观察分支，不等同于断线；其他传输异常按诊断处理。用户接管手机后重新观察当前 App，不继续使用接管前的坐标或猜测原页面。
 
 `XCTDaemonErrorDomain Code=41`、`local.pid.0` 或 `pua_foreground_unavailable` 是 PUA / XCTest 通道故障，不能靠改 selector 或把 `status.ready=true` 当作可操作证明来解决：调用 `pua_ready(screenshot=false)`。它先重建会话重读一次，持续故障才后台恢复经过配置、endpoint、worker 与监听端口归属核验的本插件服务，不重放失败的导航、输入或提交。`state="recovering"` 时按 recovery.job_id 查询同一工作，recovery_phase 到 serving 后重验 READY，不重复 start、不等 succeeded；`state="recovery_required"` 表示本次关闭了恢复，仅在用户指令允许时再用 recover=true；`pua_recovery_required` 错误按其中的冷却、归属或构建原因处理，不能按端口杀进程。两种未就绪状态都没有 error，仍不表示 READY。各状态的完整处理见 [通道恢复](references/recovery.md)。
 

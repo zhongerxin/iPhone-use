@@ -19,15 +19,18 @@ type Preview = {
   stream_id?: string;
   frame: Frame | null;
   frame_available?: boolean;
+  frame_age_ms?: number | null;
   service_ready?: boolean;
   viewport: Size | null;
   busy: boolean;
+  input_busy?: boolean;
   paused: boolean;
   pause_reason?: 'device_locked' | 'authentication' | 'unknown' | null;
   events: Gesture[];
   device?: { model?: string } | null;
 };
 type LiveState = 'connecting' | 'live' | 'paused' | 'offline';
+type DeviceAppearance = 'plain' | 'rounded' | 'dynamic-island';
 type EmptyState = 'connecting' | 'offline' | 'locked' | 'authentication' | 'paused' | 'unavailable';
 type ToolName = 'refresh' | 'home' | 'screenshot';
 type CursorEffect = { node: HTMLElement; animation?: Animation; timer?: ReturnType<typeof setTimeout> };
@@ -49,7 +52,7 @@ const tools: Record<ToolName, HTMLButtonElement> = {
   screenshot: document.getElementById('tool-screenshot') as HTMLButtonElement,
 };
 const app = new App(
-  { name: 'iPhone Use Screen', version: '0.3.10' },
+  { name: 'iPhone Use Screen', version: '0.3.16' },
   { availableDisplayModes: ['fullscreen'] },
   { autoResize: false },
 );
@@ -63,6 +66,7 @@ let streamId: string | undefined;
 let eventId = 0;
 let dimensions: Size | undefined;
 let viewport: Size | undefined;
+let deviceAppearance: DeviceAppearance = 'plain';
 let timer: ReturnType<typeof setTimeout> | undefined;
 let failures = 0;
 let serviceUnavailable = false;
@@ -79,8 +83,8 @@ const REQUEST_TIMEOUT = 3000;
 const ACTION_TIMEOUT = 12000;
 const LIVE_TEXT: Record<LiveState, string> = { connecting: localize('连接中'), live: localize('Live'), paused: localize('已暂停'), offline: localize('未连接') };
 const EMPTY_TEXT: Record<EmptyState, string> = {
-  connecting: localize('正在连接'), offline: localize('未连接'), locked: localize('等待解锁'),
-  authentication: localize('请完成认证'), paused: localize('预览已暂停'), unavailable: localize('画面暂不可用'),
+  connecting: localize('正在连接'), offline: localize('未连接'), locked: localize('请在手机上接管操作'),
+  authentication: localize('请在手机上接管操作'), paused: localize('请在手机上接管操作'), unavailable: localize('画面暂不可用'),
 };
 const DONE: Record<ToolName, string> = { refresh: localize('已刷新连接'), home: localize('已回到主屏幕'), screenshot: localize('截图已复制到剪贴板') };
 const FAILED: Record<string, string> = {
@@ -88,7 +92,35 @@ const FAILED: Record<string, string> = {
   preview_paused: localize('认证接管期间已暂停'),
   clipboard_unavailable: localize('截图未能写入剪贴板'),
   pua_unreachable: localize('未连接到手机'),
+  phone_locked: localize('请先解锁手机'),
+  stale_viewport: localize('屏幕方向已变化，请等待新画面'),
 };
+
+// Use confirmed model names from USB discovery, never a generation threshold:
+// standard iPhone 14, the e models and every SE have different screen designs.
+// https://support.apple.com/en-us/108044
+const ISLAND_MODELS = new Set([
+  'iphone 14 pro', 'iphone 14 pro max',
+  'iphone 15', 'iphone 15 plus', 'iphone 15 pro', 'iphone 15 pro max',
+  'iphone 16', 'iphone 16 plus', 'iphone 16 pro', 'iphone 16 pro max',
+  'iphone 17', 'iphone 17 pro', 'iphone 17 pro max', 'iphone air',
+  'iphone 18 pro', 'iphone 18 pro max',
+]);
+const ROUNDED_MODELS = new Set([
+  'iphone x', 'iphone xr', 'iphone xs', 'iphone xs max',
+  'iphone 11', 'iphone 11 pro', 'iphone 11 pro max',
+  'iphone 12', 'iphone 12 mini', 'iphone 12 pro', 'iphone 12 pro max',
+  'iphone 13', 'iphone 13 mini', 'iphone 13 pro', 'iphone 13 pro max',
+  'iphone 14', 'iphone 14 plus', 'iphone 16e', 'iphone 17e',
+]);
+
+function appearanceForModel(value: string): DeviceAppearance {
+  const name = value.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (ISLAND_MODELS.has(name)) return 'dynamic-island';
+  if (ROUNDED_MODELS.has(name)) return 'rounded';
+  // Older phones, SE, other devices and unknown models get an unclipped screen.
+  return 'plain';
+}
 
 const validSize = (value: unknown): value is Size => {
   const size = value as Size | undefined;
@@ -114,6 +146,7 @@ function showEmpty(state: EmptyState) {
 
 function setLive(state: LiveState) {
   if (!image.src) showEmpty(state === 'paused' ? 'paused' : state === 'offline' ? 'offline' : 'connecting');
+  if (state !== 'paused' && image.src) emptyState.hidden = true;
   if (root.dataset.live === state) return;
   root.dataset.live = state;
   liveText.textContent = LIVE_TEXT[state];
@@ -214,15 +247,16 @@ function fitFrame() {
   const height = stage.clientHeight;
   const shortSide = Math.min(size.width, size.height);
   const bezel = shortSide * .024;
-  const outerWidth = size.width + 2 * bezel;
-  const outerHeight = size.height + 2 * bezel;
+  const inset = deviceAppearance === 'plain' ? 0 : bezel;
+  const outerWidth = size.width + 2 * inset;
+  const outerHeight = size.height + 2 * inset;
   const scale = .96 * Math.min(width / outerWidth, height / outerHeight);
   device.style.width = `${outerWidth * scale}px`;
   device.style.height = `${outerHeight * scale}px`;
-  device.style.setProperty('--bezel', `${bezel * scale}px`);
-  const radius = shortSide * .12 * scale;
+  device.style.setProperty('--bezel', `${inset * scale}px`);
+  const radius = deviceAppearance === 'plain' ? 0 : shortSide * .12 * scale;
   device.style.setProperty('--screen-radius', `${radius}px`);
-  const band = Math.min(bezel * scale * 3.8, radius);
+  const band = bezel * scale * 3.8;
   for (const [phase, bridge] of [.12, .32, .62].entries()) {
     device.style.setProperty(phase === 0 ? '--glow-mask' : `--glow-mask-${phase}`,
       glowMask(size.width * scale, size.height * scale, radius, band, bridge));
@@ -297,23 +331,44 @@ function showGesture(gesture: Gesture) {
 function consume(value: unknown) {
   if (disposed || !value || typeof value !== 'object') return;
   const preview = value as Partial<Preview>;
+  let nextAppearance = deviceAppearance;
   if (typeof preview.service_ready === 'boolean') serviceUnavailable = !preview.service_ready;
   if (typeof preview.stream_id === 'string' && preview.stream_id !== streamId) {
     streamId = preview.stream_id;
+    // A replacement stream may belong to another phone; wait for its model.
+    nextAppearance = 'plain';
+    model.textContent = 'iPhone';
     // Sequence numbers restart with the server, but keep the last pixels until
-    // its replacement is ready. Authentication pause remains an explicit erase.
+    // its replacement is ready.
     frameSeq = 0;
     eventId = 0;
     root.dataset.operating = 'false';
     retainFrame();
   }
-  if (typeof preview.device?.model === 'string' && preview.device.model) model.textContent = preview.device.model;
+  if (typeof preview.device?.model === 'string' && preview.device.model.trim()) {
+    model.textContent = preview.device.model;
+    nextAppearance = appearanceForModel(preview.device.model);
+  }
+  if (nextAppearance !== deviceAppearance) {
+    deviceAppearance = nextAppearance;
+    device.dataset.appearance = deviceAppearance;
+    fitFrame();
+  }
   if (validSize(preview.viewport) && (viewport?.width !== preview.viewport.width || viewport?.height !== preview.viewport.height)) {
     viewport = preview.viewport;
     if (!dimensions) fitFrame();
   }
   if (preview.paused === true) {
-    clearFrame();
+    // Freeze the already displayed page underneath the handoff overlay. Invalidate
+    // older requests and input freshness; resume must fetch a frame again.
+    frameGeneration++;
+    cancelPointer();
+    retainFrame();
+    decodedAt = freshUntil = -Infinity;
+    frameSeq = 0;
+    root.dataset.frameSeq = '0';
+    root.dataset.operating = 'false';
+    emptyState.hidden = false;
     setLive('paused');
     liveText.textContent = preview.pause_reason === 'device_locked' ? localize('等待解锁') : LIVE_TEXT.paused;
     liveText.title = preview.pause_reason === 'device_locked'
@@ -323,13 +378,17 @@ function consume(value: unknown) {
       : preview.pause_reason === 'authentication' ? 'authentication' : 'paused');
     return;
   }
+  const resuming = preview.paused === false && root.dataset.live === 'paused';
+  if (resuming) setLive('connecting');
   if (preview.frame_available === false) {
     retainFrame();
     // The stream has no frame while USB capture starts; that is still connecting.
-    setLive(image.src || serviceUnavailable ? 'offline' : 'connecting');
+    setLive(resuming && !serviceUnavailable ? 'connecting' : image.src || serviceUnavailable ? 'offline' : 'connecting');
   } else if (preview.frame_available === true || preview.frame) {
     setLive('live');
   }
+  freshUntil = typeof preview.frame_age_ms === 'number' && preview.frame_age_ms >= 0
+    ? performance.now() + Math.max(0, 2000 - preview.frame_age_ms) : -Infinity;
   const frame = preview.frame;
   if (frame && validSize(frame) && Number.isInteger(frame.seq) && frame.seq > frameSeq
       && typeof frame.data === 'string' && frame.data.length > 0
@@ -341,13 +400,23 @@ function consume(value: unknown) {
       dimensions = { width: frame.width, height: frame.height };
       fitFrame();
     }
-    image.src = `data:${frame.mimeType};base64,${frame.data}`;
+    decodedAt = -Infinity;
+    failedFrame = false;
+    const source = `data:${frame.mimeType};base64,${frame.data}`;
+    const generation = frameGeneration;
+    image.onload = () => {
+      if (disposed || generation !== frameGeneration || frame.seq !== frameSeq || image.src !== source || failedFrame) return;
+      decodedAt = performance.now();
+      lastGoodFrame = { source, size: { width: frame.width, height: frame.height } };
+    };
+    image.src = source;
     image.hidden = false;
     emptyState.hidden = true;
     device.hidden = false;
     screen.hidden = false;
   }
   if (typeof preview.busy === 'boolean') root.dataset.busy = String(preview.busy);
+  root.dataset.inputBusy = String(preview.input_busy ?? preview.busy);
   // Keep the edge light on between tools and while the model plans its next action.
   if (preview.busy === true) root.dataset.operating = 'true';
   if (Array.isArray(preview.events)) {
@@ -388,6 +457,7 @@ async function poll() {
     if (!visible() || generation !== frameGeneration) return;
     if (result.isError) throw new Error('preview unavailable');
     consume(result.structuredContent);
+    await recoverViewport();
     failures = 0;
     const preview = result.structuredContent as Partial<Preview> | undefined;
     nextDelay = preview?.paused || preview?.frame_available === false
@@ -408,7 +478,7 @@ async function act(name: ToolName) {
   const previousEmptyState = emptyState.dataset.state as EmptyState;
   if (name === 'refresh') {
     frameGeneration++; // Ignore a poll from before this reconnect click.
-    if (!image.src) showEmpty('connecting');
+    if (!image.src && root.dataset.live !== 'paused') showEmpty('connecting');
   }
   acting = true;
   tools[name].dataset.busy = 'true';
@@ -440,6 +510,141 @@ async function act(name: ToolName) {
     syncTools();
   }
 }
+// Pointer coordinates are relative to the contained image, never the bezel or panel.
+let decodedAt = -Infinity;
+let freshUntil = -Infinity;
+let failedFrame = false;
+type PointerStart = { id: number; point: Point; client: Point; at: number; generation: number; stream?: string; size: Size; moved: boolean };
+let pointer: PointerStart | undefined;
+let viewportRetryAt = -Infinity;
+async function recoverViewport() {
+  if (!visible() || acting || root.dataset.live !== 'live' || root.dataset.inputBusy === 'true'
+      || !validSize(dimensions) || !validSize(viewport)
+      || Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01
+      || performance.now() < viewportRetryAt) return;
+  // A rotated MJPEG frame can arrive without any phone tool updating the cached viewport.
+  // Refresh only on mismatch; failures are throttled and never replay a gesture.
+  viewportRetryAt = performance.now() + 2000;
+  const generation = frameGeneration, stream = streamId;
+  try {
+    const result = await app.callServerTool({
+      name: 'pua_screen_action', arguments: { action: 'viewport' },
+    }, { timeout: ACTION_TIMEOUT });
+    const data = result.structuredContent as Partial<Preview> | undefined;
+    if (visible() && generation === frameGeneration && stream === streamId
+        && !result.isError && validSize(data?.viewport)) viewport = data.viewport;
+  } catch { /* Keep input disabled until geometry can be verified by a later poll. */ }
+}
+function canPoint() {
+  return visible() && !acting && root.dataset.live === 'live' && root.dataset.inputBusy !== 'true'
+    && !failedFrame && !image.hidden && !!image.src && validSize(viewport) && validSize(dimensions)
+    && Number.isFinite(decodedAt) && performance.now() < freshUntil
+    && Math.abs(dimensions.width / dimensions.height - viewport.width / viewport.height) < .01;
+}
+function pointerPoint(event: MouseEvent): Point | undefined {
+  if (!viewport || !dimensions) return;
+  const rect = screen.getBoundingClientRect();
+  const scale = Math.min(rect.width / dimensions.width, rect.height / dimensions.height);
+  const width = dimensions.width * scale, height = dimensions.height * scale;
+  const x = event.clientX - rect.left - (rect.width - width) / 2;
+  const y = event.clientY - rect.top - (rect.height - height) / 2;
+  if (width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height) return;
+  return { x: x / width * viewport.width, y: y / height * viewport.height };
+}
+function cancelPointer() {
+  const current = pointer;
+  pointer = undefined;
+  if (current && screen.hasPointerCapture(current.id)) screen.releasePointerCapture(current.id);
+}
+function pointerDown(event: PointerEvent) {
+  if (!event.isPrimary) { cancelPointer(); return; }
+  if (event.button !== 0 || !canPoint()) return;
+  const point = pointerPoint(event);
+  if (!point || !viewport) return;
+  event.preventDefault();
+  pointer = { id: event.pointerId, point, client: { x: event.clientX, y: event.clientY },
+    at: performance.now(), generation: frameGeneration, stream: streamId, size: { ...viewport }, moved: false };
+  screen.setPointerCapture(event.pointerId);
+}
+function pointerMove(event: PointerEvent) {
+  if (pointer?.id === event.pointerId && Math.hypot(event.clientX - pointer.client.x, event.clientY - pointer.client.y) > 6) pointer.moved = true;
+}
+function pointerUp(event: PointerEvent) {
+  const start = pointer;
+  if (!start || start.id !== event.pointerId) return;
+  pointerMove(event);
+  const end = pointerPoint(event);
+  cancelPointer();
+  if (!end || !canPoint() || start.generation !== frameGeneration || start.stream !== streamId
+      || start.size.width !== viewport?.width || start.size.height !== viewport?.height) return;
+  // Long presses and looped drags are deliberately not converted into surprise taps.
+  if (!start.moved && performance.now() - start.at > 700) return;
+  if (start.moved && Math.hypot(end.x - start.point.x, end.y - start.point.y) < 3) return;
+  void sendPointer({ action: start.moved ? 'drag' : 'tap', x: start.point.x, y: start.point.y,
+    width: start.size.width, height: start.size.height,
+    ...(start.moved ? { to_x: end.x, to_y: end.y, duration: Math.max(.05, Math.min(1, (performance.now() - start.at) / 1000)) } : {}) });
+}
+async function sendPointer(args: Record<string, string | number>) {
+  acting = true;
+  syncTools();
+  try {
+    const result = await app.callServerTool({ name: 'pua_screen_action', arguments: args }, { timeout: ACTION_TIMEOUT });
+    const data = result.structuredContent as { error?: { code?: string; uncertain?: boolean } } | undefined;
+    if (result.isError || data?.error) notify(data?.error?.uncertain ? localize('操作结果不确定，请查看手机后再操作') : FAILED[data?.error?.code ?? ''] ?? localize('操作未完成，请查看手机状态'), true);
+  } catch {
+    notify(localize('操作结果不确定，请查看手机后再操作'), true);
+  } finally {
+    acting = false;
+    freshUntil = -Infinity; // Require another fresh stream heartbeat before the next gesture.
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    syncTools();
+    schedule(0);
+  }
+}
+// A trackpad emits many wheel events, including momentum after fingers lift.
+// Send one bounded phone swipe per burst; never queue the remaining events.
+let wheelAt = -Infinity;
+let wheelX = 0, wheelY = 0;
+let wheelConsumed = false;
+let wheelGeneration = 0;
+function wheel(event: WheelEvent) {
+  const now = performance.now();
+  if (now - wheelAt > 180) {
+    wheelX = wheelY = 0;
+    wheelConsumed = false;
+    wheelGeneration = frameGeneration;
+  }
+  wheelAt = now;
+  if (event.ctrlKey || event.metaKey) { wheelConsumed = true; return; } // pinch/zoom belongs to the host
+  event.preventDefault();
+  if (wheelConsumed) return;
+  if (pointer || !canPoint() || wheelGeneration !== frameGeneration || !pointerPoint(event) || !viewport) {
+    wheelConsumed = true;
+    return;
+  }
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? screen.getBoundingClientRect().height : 1;
+  if (!Number.isFinite(event.deltaX) || !Number.isFinite(event.deltaY)) { wheelConsumed = true; return; }
+  wheelX += event.deltaX * unit;
+  wheelY += event.deltaY * unit;
+  if (Math.max(Math.abs(wheelX), Math.abs(wheelY)) < 24) return;
+  wheelConsumed = true;
+  const horizontal = Math.abs(wheelX) > Math.abs(wheelY);
+  const size = viewport;
+  // Positive wheel delta scrolls content forward: the finger travels up/left.
+  // Use the center so hovering near an edge cannot clip the phone gesture.
+  const dx = horizontal ? -Math.sign(wheelX) * size.width * .65 : 0;
+  const dy = horizontal ? 0 : -Math.sign(wheelY) * size.height * .45;
+  void sendPointer({ action: 'drag', x: size.width / 2 - dx / 2, y: size.height / 2 - dy / 2,
+    to_x: size.width / 2 + dx / 2, to_y: size.height / 2 + dy / 2,
+    width: size.width, height: size.height, duration: .15 });
+}
+screen.addEventListener('wheel', wheel, { passive: false });
+const pointerHandlers = { pointerdown: pointerDown, pointermove: pointerMove, pointerup: pointerUp,
+  pointercancel: cancelPointer, lostpointercapture: cancelPointer };
+for (const [name, handler] of Object.entries(pointerHandlers)) screen.addEventListener(name, handler as EventListener);
+screen.title = localize('点击操作手机；拖动或触控板双指滑动来滚动、翻页');
+
 const toolHandlers = (Object.keys(tools) as ToolName[]).map(name => {
   const handler = () => { void act(name); };
   tools[name].addEventListener('click', handler);
@@ -447,6 +652,8 @@ const toolHandlers = (Object.keys(tools) as ToolName[]).map(name => {
 });
 
 function visibilityChanged() {
+  wheelConsumed = true;
+  cancelPointer();
   root.dataset.pageVisible = String(visible());
   if (!visible()) {
     if (timer) clearTimeout(timer);
@@ -461,10 +668,9 @@ function visibilityChanged() {
 
 const resizeObserver = new ResizeObserver(fitFrame);
 resizeObserver.observe(stage);
-image.onload = () => {
-  if (dimensions && image.src) lastGoodFrame = { source: image.src, size: dimensions };
-};
 image.onerror = () => {
+  failedFrame = true;
+  decodedAt = -Infinity;
   if (disposed || root.dataset.live === 'paused' || !image.src) return;
   if (lastGoodFrame && image.src !== lastGoodFrame.source) {
     image.src = lastGoodFrame.source;
@@ -503,6 +709,9 @@ function dispose() {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = undefined;
   toast.hidden = true;
+  cancelPointer();
+  screen.removeEventListener('wheel', wheel);
+  for (const [name, handler] of Object.entries(pointerHandlers)) screen.removeEventListener(name, handler as EventListener);
   for (const [name, handler] of toolHandlers) tools[name].removeEventListener('click', handler);
   clearFrame();
   resizeObserver.disconnect();
@@ -546,6 +755,7 @@ async function initialize() {
 }
 
 root.dataset.pageVisible = String(visible());
+device.dataset.appearance = deviceAppearance;
 device.hidden = screen.hidden = false;
 image.hidden = true;
 emptyState.hidden = false;

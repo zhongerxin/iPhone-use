@@ -1,6 +1,6 @@
 {
   "name": "iphone-use",
-  "version": "0.3.10",
+  "version": "0.3.16",
   "description": "让 Codex 通过 USB 操作真实 iPhone，支持引导安装、App 自动化、实时屏幕和截图回退。 本对话首次使用先 setup 复用或启动服务，等待就绪后再 READY。",
   "author": {
     "name": "ZHONG XIN"

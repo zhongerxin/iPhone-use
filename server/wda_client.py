@@ -1,5 +1,6 @@
 """Direct, persistent PUA HTTP transport. No Appium server, no action replay."""
 import collections
+import errno
 import http.client
 import json
 import socket
@@ -10,6 +11,7 @@ from urllib.parse import urlsplit
 # separate rect and type reads. Both keys are handled by the pinned WDA's settings.
 ELEMENT_RESPONSE_ATTRIBUTES = "type,label,rect,enabled,attribute/name,attribute/value"
 SESSION_SETTINGS = {"waitForIdleTimeout": 0, "animationCoolOffTimeout": 0,
+                    "snapshotMaxDepth": 50, "snapshotMaxChildren": 2147483647,
                     "shouldUseCompactResponses": False,
                     "elementResponseAttributes": ELEMENT_RESPONSE_ATTRIBUTES}
 
@@ -31,6 +33,7 @@ class WDAClient:
         self.host, self.port = parsed.hostname, parsed.port or 80
         self.timeout, self.connection, self.session_id = timeout, None, None
         self._settings_session_id, self._settings_error = None, None
+        self._settings_restore = {}
         self.records = collections.deque(maxlen=2000)
 
     def close(self):
@@ -54,14 +57,45 @@ class WDAClient:
             len(parts) == 3 and parts[0] == "element" and parts[2] in ("element", "elements"))
 
     @staticmethod
+    def transport_error(exc, readonly):
+        if isinstance(exc, (socket.timeout, TimeoutError)) or isinstance(exc, OSError) and exc.errno == errno.ETIMEDOUT:
+            kind = "pua_timeout"
+            message = "PUA request timed out; this does not prove the phone or service disconnected."
+            recovery = {"retry_after_seconds": 2, "max_wait_retries": 2,
+                        "next_tool": "pua_observe", "next_arguments": {"mode": "screenshot"},
+                        "replay_action": False,
+                        "next_step": "Wait on the host before one fresh observation; do not use pua_wait or immediately repeat a tree query. After at most two delayed attempts, inspect pua_setup(action=status) diagnostically. A repeated timeout alone does not authorize restart."}
+        elif isinstance(exc, (ConnectionError, http.client.RemoteDisconnected, http.client.IncompleteRead)) or (
+                isinstance(exc, OSError) and exc.errno in (errno.ENOTCONN, errno.ENETUNREACH, errno.EHOSTUNREACH)):
+            kind = "pua_unreachable"
+            message = "PUA HTTP connection was refused or interrupted; this does not prove USB was unplugged."
+            recovery = {"next_tool": "pua_setup", "next_arguments": {"action": "status"},
+                        "replay_action": False,
+                        "next_step": "Inspect service and jobs; reuse an active start/recovery job, or start once from the existing configuration/build only if the service is confirmed stopped and startup is allowed. Verify READY before continuing, then inspect actual state without replaying the failed action."}
+        else:
+            kind = "pua_transport_error"
+            message = "PUA HTTP transport failed without a confirmed timeout or disconnect."
+            recovery = {"next_tool": "pua_setup", "next_arguments": {"action": "status"},
+                        "replay_action": False,
+                        "next_step": "Inspect channel status diagnostically; do not infer disconnection or restart solely from this error. Read actual state before continuing any uncertain action."}
+        message += (" No phone action was executed by this read." if readonly
+                    else " The write request may have completed; inspect fresh state before deciding what remains. Never blindly replay phone actions.")
+        return WDAError(kind if readonly else "action_uncertain", message, uncertain=not readonly,
+                        details={"transport_error": kind, "recovery": recovery})
+
+    @staticmethod
     def remaining(deadline):
         budget = deadline - time.monotonic()
         if budget <= 0:
-            raise WDAError("pua_unreachable", "PUA read deadline expired; no phone action was replayed.")
+            raise WDAClient.transport_error(TimeoutError("PUA request deadline expired"), readonly=True)
         return budget
 
     def request(self, method, path, payload=None, timeout=None):
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
+        # A timed-out bounded snapshot must not leave subsequent AX queries capped.
+        # Health/status can still diagnose the channel without waiting for settings.
+        if self._settings_restore and path not in ("/status", "/session") and not path.endswith("/appium/settings"):
+            self.ensure_session(timeout=self.remaining(deadline))
         readonly = self.is_read(method, path)
         for attempt in range(2 if readonly else 1):
             try:
@@ -69,7 +103,7 @@ class WDAClient:
             except WDAError as exc:
                 # Reconnect once only for transport failures, within the original budget.
                 # HTTP/JSON/backend failures do not become silent retry loops.
-                if not (readonly and attempt == 0 and exc.code == "pua_unreachable"
+                if not (readonly and attempt == 0 and exc.code in ("pua_unreachable", "pua_transport_error")
                         and time.monotonic() < deadline):
                     raise
 
@@ -135,10 +169,9 @@ class WDAClient:
             raise
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
             self.close()
-            code = "pua_unreachable" if readonly else "action_uncertain"
-            message = ("PUA read connection failed or timed out; no phone action was executed." if readonly
-                       else "PUA connection failed or timed out. Read fresh state before deciding whether to repeat an action.")
-            raise WDAError(code, message, uncertain=not readonly) from exc
+            error = self.transport_error(exc, readonly)
+            code = error.code
+            raise error from exc
         finally:
             # No text, predicates, values, screenshots, app IDs or device identifiers in metrics.
             endpoint = path.split("?")[0]
@@ -173,7 +206,8 @@ class WDAClient:
             self._settings_session_id, self._settings_error = self.session_id, None
             try:
                 self.request("POST", f"/session/{self.session_id}/appium/settings", {
-                    "settings": dict(SESSION_SETTINGS)}, timeout=self.remaining(deadline))
+                    "settings": {**SESSION_SETTINGS, **self._settings_restore}}, timeout=self.remaining(deadline))
+                self._settings_restore.clear()
             except WDAError as exc:
                 exc.details.update({"operation": "session_settings", "session_created": created,
                                     "session_available": exc.code != "invalid session id",
@@ -181,10 +215,14 @@ class WDAClient:
                 if exc.code == "invalid session id":
                     self.session_id = None
                 self._settings_error = exc
+                if exc.details.get("transport_error", exc.code) in ("pua_timeout", "pua_unreachable", "pua_transport_error"):
+                    # A later call may reapply idempotent settings, never a phone action.
+                    self._settings_session_id = None
+                    exc.details["action_executed"] = False
                 raise
         elif self.session_id == self._settings_session_id and self._settings_error:
-            # A settings timeout does not mean session creation failed. Keep its real ID,
-            # surface the failure, and let an explicit session reset recover it.
+            # Keep the real session ID for backend settings failures; an explicit
+            # reset can recover them without pretending session creation failed.
             raise self._settings_error
         return self.session_id
 
@@ -203,8 +241,9 @@ class WDAClient:
                         continue
                 raise
 
-    def reapply_settings(self):
+    def reapply_settings(self, restore=None):
         """Send the session settings again before the next command."""
+        if restore:self._settings_restore.update(restore)
         self._settings_session_id, self._settings_error = None, None
 
     def clear_metrics(self):

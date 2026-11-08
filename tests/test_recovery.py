@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 from iphone_use import Runtime
-from wda_client import WDAError
+from wda_client import WDAClient, WDAError
 from wda_controller import PhoneController
 from test_controller import FakeWDA
 
@@ -149,6 +149,62 @@ class RecoveryTests(unittest.TestCase):
                     self.manager.recover.assert_not_called()
                     self.manager.dispatch.assert_not_called()
                     self.assert_no_phone_mutation()
+
+    def test_ready_timeout_guides_delayed_ready_retry_without_setup_or_restart(self):
+        for screenshot in (True, False):
+            for recover in (True, False):
+                for readonly in (True, False):
+                    with self.subTest(screenshot=screenshot, recover=recover, readonly=readonly):
+                        fault = WDAClient.transport_error(TimeoutError("slow"), readonly)
+                        with patch.object(self.client, "request", side_effect=fault) as request:
+                            error = self.assert_error("pua_timeout" if readonly else "action_uncertain",
+                                                      screenshot=screenshot, recover=recover)
+                        self.assertFalse(error["ready"])
+                        self.assertFalse(error["action_executed"])
+                        self.assertFalse(error["initialization_required"])
+                        self.assertEqual(error["recovery"]["next_tool"], "pua_ready")
+                        self.assertEqual(error["recovery"]["next_arguments"], {"screenshot": screenshot, "recover": recover})
+                        self.assertEqual(error["recovery"]["max_wait_retries"], 2)
+                        self.assertGreater(error["recovery"]["retry_after_seconds"], 0)
+                        self.assertFalse(error["recovery"]["replay_action"])
+                        self.assertNotIn("proof", error)
+                        request.assert_called_once()
+                        self.manager.recover.assert_not_called()
+                        self.manager.dispatch.assert_not_called()
+                        self.assert_no_phone_mutation()
+
+    def test_ready_source_timeout_can_succeed_on_a_later_call(self):
+        fault = WDAClient.transport_error(TimeoutError("slow snapshot"), readonly=True)
+        original = self.client.source
+        with patch.object(self.client, "source", side_effect=[fault, original()]) as source:
+            error = self.assert_error("pua_timeout", screenshot=False)
+            self.assertEqual(source.call_count, 1)
+            result = self.runtime.call(error["recovery"]["next_tool"], error["recovery"]["next_arguments"])
+        self.assertTrue(result["ready"])
+        self.assertEqual(source.call_count, 2)
+        self.manager.recover.assert_not_called()
+        self.assert_no_phone_mutation()
+
+    def test_timeout_after_foreground_read_retry_still_guides_wait_not_restart(self):
+        foreground = WDAError("pua_foreground_unavailable", "Application local.pid.0 unavailable")
+        timeout = WDAClient.transport_error(TimeoutError("slow snapshot"), readonly=True)
+        with patch.object(self.client, "source", side_effect=[foreground, timeout]):
+            error = self.assert_error("pua_timeout", screenshot=False, recover=False)
+        self.assertEqual(error["recovery"]["next_tool"], "pua_ready")
+        self.assertEqual(error["recovery"]["next_arguments"], {"screenshot": False, "recover": False})
+        self.manager.recover.assert_not_called()
+        self.assert_no_phone_mutation()
+
+    def test_action_observation_timeout_preserves_executed_action_and_wait_guidance(self):
+        fault = WDAClient.transport_error(TimeoutError("slow snapshot"), readonly=True)
+        with patch.object(self.client, "source", side_effect=fault):
+            error = self.assert_error("pua_timeout", tool="pua_tap", selector={"label": "Target"}, observe="tree")
+        self.assertTrue(error["action_executed"])
+        self.assertFalse(error["action_complete"])
+        self.assertEqual(error["recovery"]["next_tool"], "pua_observe")
+        self.assertFalse(error["recovery"]["replay_action"])
+        self.assertEqual(sum(path.endswith("/click") for _, path, _ in self.client.actions()), 1)
+        self.manager.recover.assert_not_called()
 
     def assert_not_ready_state(self, result, state):
         self.assertFalse(result["ready"])

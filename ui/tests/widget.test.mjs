@@ -18,7 +18,7 @@ for (const language of ['default', 'ja']) {
 }
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
-const preview = (fields = {}) => ({ server_time: 1000, frame: null, viewport: null, busy: false, paused: false, events: [], ...fields });
+const preview = (fields = {}) => ({ server_time: 1000, frame_age_ms: 0, frame: null, viewport: null, busy: false, paused: false, events: [], ...fields });
 // Fixtures exist only in this isolated DOM test, never in the shipped widget.
 const frame = (seq = 1) => ({ seq, data: 'test-image-only', mimeType: 'image/png', width: 900, height: 1800 });
 
@@ -42,6 +42,10 @@ async function harness({ language = 'default', reducedMotion = false, context = 
     disabled: false, textContent: '', handlers: new Map(), children: [],
     addEventListener(name, fn) { this.handlers.set(name, fn); },
     removeEventListener(name) { this.handlers.delete(name); },
+    getBoundingClientRect() { return { left: 10, top: 20, width: 200, height: 400 }; },
+    setPointerCapture(id) { this.captured = id; },
+    hasPointerCapture(id) { return this.captured === id; },
+    releasePointerCapture() { this.captured = undefined; },
     click() { this.handlers.get('click')?.(); },
     removeAttribute(name) { delete this[name]; },
     cloneNode() { return { ...this, style: { ...this.style }, dataset: { ...this.dataset }, children: [], animation: undefined }; },
@@ -93,6 +97,7 @@ async function harness({ language = 'default', reducedMotion = false, context = 
   return {
     app: instance, calls, lifecycle, elements, document, timers, resize,
     requestOptions, stageSize,
+    advance(ms) { now += ms; },
     get layoutReads() { return layoutReads; },
     get imageWrites() { return imageWrites; },
     visibility(hidden) { document.hidden = hidden; listeners.get('visibilitychange')?.(); },
@@ -126,9 +131,9 @@ test('Japanese status and authentication text are confined to the selected build
   for (const [fields, defaultLabel, japaneseLabel] of [
     [{ frame_available: false }, '正在连接', '接続しています'],
     [{ frame_available: false, service_ready: false }, '未连接', '未接続'],
-    [{ paused: true, pause_reason: 'device_locked' }, '等待解锁', 'ロック解除待ち'],
-    [{ paused: true, pause_reason: 'authentication' }, '请完成认证', '認証を完了してください'],
-    [{ paused: true }, '预览已暂停', 'プレビューは一時停止中です'],
+    [{ paused: true, pause_reason: 'device_locked' }, '请在手机上接管操作', 'iPhoneで操作してください'],
+    [{ paused: true, pause_reason: 'authentication' }, '请在手机上接管操作', 'iPhoneで操作してください'],
+    [{ paused: true }, '请在手机上接管操作', 'iPhoneで操作してください'],
   ]) {
     for (const h of [normal, japanese]) h.app.ontoolresult({ structuredContent: preview(fields) });
     assert.equal(normal.elements['empty-state-text'].textContent, defaultLabel);
@@ -149,7 +154,7 @@ test('Japanese toolbar reports outcomes without changing the action contract', a
 
 test('preserves full frame aspect ratio and maps gestures using the point viewport', async () => {
   const h = await harness();
-  h.app.ontoolresult({ structuredContent: preview({ frame: frame(12), viewport: { width: 400, height: 800 }, busy: true,
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(12), device: { model: 'iPhone 17 Pro Max' }, viewport: { width: 400, height: 800 }, busy: true,
     events: [{ id: 1, kind: 'tap', at: 1000, point: { x: 100, y: 200 }, viewport: { width: 400, height: 800 } }] }) });
   assert.equal(h.elements.app.dataset.frameSeq, '12');
   assert.equal(h.elements.app.dataset.busy, 'true');
@@ -269,6 +274,7 @@ test('operation glow survives tool gaps, hidden panels and temporary missing fra
 
 test('fits the entire chassis in narrow and landscape panels while preserving image coordinates', async () => {
   const h = await harness();
+  h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 17 Pro Max' } }) });
   let seq = 0;
   for (const [panelWidth, panelHeight, imageWidth, imageHeight] of [[170, 450, 440, 956], [900, 270, 956, 440], [310, 140, 440, 956]]) {
     h.stageSize.width = panelWidth - 24;
@@ -306,14 +312,15 @@ test('a hidden panel stops polling, and slow calls never overlap', async () => {
   assert.equal(h.calls.length, 2);
 });
 
-test('paused clears the screen, errors back off silently, teardown cancels work', async () => {
+test('paused overlays the retained screen, errors back off silently, teardown clears it', async () => {
   const h = await harness({ reply: async () => ({ isError: true }) });
   h.app.ontoolresult({ structuredContent: preview({ frame: frame(4), busy: true }) });
   h.app.ontoolresult({ structuredContent: preview({ paused: true }) });
   assert.equal(h.elements.screen.hidden, false);
-  assert.equal(h.elements.image.hidden, true);
-  assert.equal(h.elements['empty-state-text'].textContent, '预览已暂停');
-  assert.equal(h.elements.image.src, undefined);
+  assert.equal(h.elements.image.hidden, false);
+  assert.equal(h.elements['empty-state-text'].textContent, '请在手机上接管操作');
+  assert.equal(h.elements.image.src, 'data:image/png;base64,test-image-only');
+  assert.equal(h.elements['empty-state'].hidden, false);
   assert.equal(h.elements.app.dataset.busy, 'false');
   assert.equal(h.elements.device.hidden, false);
   assert.equal(h.elements.app.dataset.operating, 'false');
@@ -327,6 +334,7 @@ test('paused clears the screen, errors back off silently, teardown cancels work'
   assert.equal(h.timers.size, 0);
   assert.equal(h.resize.disconnected, true);
   assert.equal(h.elements.screen.hidden, true);
+  assert.equal(h.elements.image.src, undefined);
 });
 
 test('reduced motion shows a stationary cursor and old gestures are not replayed', async () => {
@@ -490,10 +498,10 @@ test('empty screen explains connecting, offline, locked, authentication and paus
   assert.equal(h.elements['empty-state-text'].textContent, '正在连接');
   for (const [fields, state, label] of [
     [{ frame_available: false, service_ready: false }, 'offline', '未连接'],
-    [{ paused: true, pause_reason: 'device_locked' }, 'locked', '等待解锁'],
-    [{ paused: true, pause_reason: 'authentication' }, 'authentication', '请完成认证'],
-    [{ paused: true, pause_reason: 'unknown' }, 'paused', '预览已暂停'],
-    [{ paused: true }, 'paused', '预览已暂停'],
+    [{ paused: true, pause_reason: 'device_locked' }, 'locked', '请在手机上接管操作'],
+    [{ paused: true, pause_reason: 'authentication' }, 'authentication', '请在手机上接管操作'],
+    [{ paused: true, pause_reason: 'unknown' }, 'paused', '请在手机上接管操作'],
+    [{ paused: true }, 'paused', '请在手机上接管操作'],
   ]) {
     h.app.ontoolresult({ structuredContent: preview(fields) });
     assert.equal(h.elements['empty-state'].dataset.state, state);
@@ -505,7 +513,7 @@ test('empty screen explains connecting, offline, locked, authentication and paus
   assert.equal(h.elements['empty-state'].hidden, true);
 });
 
-test('failed reconnect restores the authentication symbol and keeps phone controls disabled', async () => {
+test('failed reconnect preserves the handoff prompt and keeps phone controls disabled', async () => {
   let release;
   const h = await harness({ reply: params => params.name === 'pua_screen_action'
     ? new Promise(resolve => { release = resolve; })
@@ -513,11 +521,11 @@ test('failed reconnect restores the authentication symbol and keeps phone contro
   h.app.ontoolresult({ structuredContent: preview({ paused: true, pause_reason: 'authentication' }) });
   h.elements['tool-refresh'].click();
   await flush();
-  assert.equal(h.elements['empty-state'].dataset.state, 'connecting');
+  assert.equal(h.elements['empty-state'].dataset.state, 'authentication');
   release({ isError: true, structuredContent: { error: { code: 'pua_unreachable' } } });
   await flush();
   assert.equal(h.elements['empty-state'].dataset.state, 'authentication');
-  assert.equal(h.elements['empty-state-text'].textContent, '请完成认证');
+  assert.equal(h.elements['empty-state-text'].textContent, '请在手机上接管操作');
   assert.equal(h.elements['tool-home'].disabled, true);
   assert.equal(h.elements['tool-screenshot'].disabled, true);
 });
@@ -533,7 +541,7 @@ test('first image decode failure explains unavailable picture in the chassis', a
   assert.equal(h.elements['empty-state'].hidden, false);
 });
 
-test('decode failure restores the last loaded image, while authentication pause erases its backup', async () => {
+test('decode failure restores the last loaded image and a handoff retains it', async () => {
   const h = await harness();
   h.app.ontoolresult({ structuredContent: preview({ frame: frame(6) }) });
   h.elements.image.onload();
@@ -546,7 +554,7 @@ test('decode failure restores the last loaded image, while authentication pause 
   assert.equal(h.calls[0].arguments.after_seq, 0);
   h.app.ontoolresult({ structuredContent: preview({ paused: true }) });
   h.elements.image.onerror();
-  assert.equal(h.elements.image.src, undefined);
+  assert.equal(h.elements.image.src, previous);
   assert.equal(h.elements.screen.hidden, false);
   assert.equal(h.elements['empty-state'].hidden, false);
 });
@@ -563,21 +571,160 @@ test('unavailable and paused previews poll slowly, and focus wakes recovery imme
   assert.equal(h.timers.size, 0);
 });
 
-test('a frame requested before authentication pause cannot restore cleared pixels', async () => {
+test('a frame requested before authentication pause cannot replace the frozen page or remove its overlay', async () => {
   let resolve;
   const h = await harness({ reply: () => new Promise(done => { resolve = done; }) });
   h.app.ontoolresult({ structuredContent: preview({ frame: frame(4) }) });
+  const source = h.elements.image.src;
   await h.tick();
   h.app.ontoolresult({ structuredContent: preview({ paused: true }) });
-  resolve({ structuredContent: preview({ frame: frame(5), paused: false }) });
+  resolve({ structuredContent: preview({ frame: { ...frame(5), data: 'late-frame' }, paused: false }) });
   await flush();
-  assert.equal(h.elements.image.src, undefined);
+  assert.equal(h.elements.image.src, source);
+  assert.equal(h.elements.app.dataset.live, 'paused');
   assert.equal(h.elements.screen.hidden, false);
   assert.equal(h.elements['empty-state'].hidden, false);
   await h.tick();
+  assert.equal(h.calls.at(-1).arguments.after_seq, 0);
   resolve({ structuredContent: preview({ frame: frame(6), paused: false }) });
   await flush();
   assert.equal(h.elements.screen.hidden, false);
+  assert.equal(h.elements['empty-state'].hidden, true);
+});
+
+test('each handoff reason retains the page geometry and ignores incoming frames and gestures while paused', async () => {
+  for (const pause_reason of ['device_locked', 'authentication', 'unknown']) {
+    const h = await harness();
+    h.app.ontoolresult({ structuredContent: preview({ frame: { ...frame(4), width: 1800, height: 900 },
+      device: { model: 'iPhone 15 Pro' }, viewport: { width: 800, height: 400 } }) });
+    h.elements.image.onload();
+    const source = h.elements.image.src;
+    const size = [h.elements.device.style.width, h.elements.device.style.height];
+    for (let i = 0; i < 3; i++) {
+      h.app.ontoolresult({ structuredContent: preview({ paused: true, pause_reason, frame_available: false,
+        frame: { ...frame(5), data: 'ignored-frame' }, events: [
+          { id: i + 1, kind: 'tap', at: 1000, point: { x: 200, y: 100 } },
+        ] }) });
+      assert.equal(h.elements.image.src, source, pause_reason);
+      assert.equal(h.elements.image.hidden, false, pause_reason);
+      assert.equal(h.elements.device.dataset.orientation, 'landscape', pause_reason);
+      assert.deepEqual([h.elements.device.style.width, h.elements.device.style.height], size);
+      assert.equal(h.elements['empty-state'].hidden, false, pause_reason);
+      assert.equal(h.elements['empty-state-text'].textContent, '请在手机上接管操作', pause_reason);
+      assert.equal(h.elements.cursor.hidden, true, pause_reason);
+      assert.equal(h.elements['tool-home'].disabled, true, pause_reason);
+      assert.equal(h.elements['tool-screenshot'].disabled, true, pause_reason);
+    }
+  }
+});
+
+test('resuming removes the overlay but frozen pixels cannot send input before a new frame decodes', async () => {
+  const h = await livePointerHarness();
+  const source = h.elements.image.src;
+  h.pointer('pointerdown', 60, 120);
+  h.app.ontoolresult({ structuredContent: preview({ paused: true, pause_reason: 'authentication' }) });
+  assert.equal(h.elements.screen.captured, undefined);
+  h.pointer('pointerup', 60, 120);
+  h.app.ontoolresult({ structuredContent: preview({ paused: false, frame_available: false }) });
+  assert.equal(h.elements.app.dataset.live, 'connecting');
+  assert.equal(h.elements['empty-state'].hidden, true);
+  assert.equal(h.elements.image.src, source);
+  h.app.ontoolresult({ structuredContent: preview({ frame_available: true }) });
+  h.elements.image.onload(); // A late load from the frozen frame is stale.
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120);
+  await flush();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0);
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(1), frame_available: true }) });
+  h.elements.image.onload();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120);
+  await flush();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+});
+
+test('only confirmed Dynamic Island models show the island', async () => {
+  const h = await harness();
+  for (const model of ['iPhone 14 Pro', 'iPhone 14 Pro Max', 'iPhone 15', 'iPhone 15 Plus', 'iPhone 15 Pro', 'iPhone 15 Pro Max',
+    'iPhone 16', 'iPhone 16 Plus', 'iPhone 16 Pro', 'iPhone 16 Pro Max', 'iPhone 17', 'iPhone 17 Pro', 'iPhone 17 Pro Max',
+    'iPhone Air', 'iPhone 18 Pro', 'iPhone 18 Pro Max', '  IPHONE  15 PRO  ']) {
+    h.app.ontoolresult({ structuredContent: preview({ device: { model } }) });
+    assert.equal(h.elements.device.dataset.appearance, 'dynamic-island', model);
+    assert.ok(parseFloat(h.elements.device.style['--bezel']) > 0, model);
+    assert.ok(parseFloat(h.elements.device.style['--screen-radius']) > 0, model);
+  }
+});
+
+test('notch models keep the rounded frame without a Dynamic Island', async () => {
+  const h = await harness();
+  for (const model of ['iPhone X', 'iPhone XR', 'iPhone XS', 'iPhone XS Max', 'iPhone 11', 'iPhone 11 Pro', 'iPhone 11 Pro Max',
+    'iPhone 12', 'iPhone 12 mini', 'iPhone 12 Pro', 'iPhone 12 Pro Max', 'iPhone 13', 'iPhone 13 mini', 'iPhone 13 Pro',
+    'iPhone 13 Pro Max', 'iPhone 14', 'iPhone 14 Plus', 'iPhone 16e', 'iPhone 17e']) {
+    h.app.ontoolresult({ structuredContent: preview({ device: { model } }) });
+    assert.equal(h.elements.device.dataset.appearance, 'rounded', model);
+    assert.ok(parseFloat(h.elements.device.style['--bezel']) > 0, model);
+    assert.ok(parseFloat(h.elements.device.style['--screen-radius']) > 0, model);
+  }
+});
+
+test('older phones, every SE and unrecognized models use a rectangular screen with no chassis', async () => {
+  const h = await harness();
+  assert.equal(h.elements.device.dataset.appearance, 'plain');
+  for (const model of ['iPhone', 'iPhone 3GS', 'iPhone 4S', 'iPhone 5', 'iPhone 5c', 'iPhone 5s', 'iPhone 6', 'iPhone 6 Plus',
+    'iPhone 6s', 'iPhone 6s Plus', 'iPhone 7', 'iPhone 7 Plus', 'iPhone 8', 'iPhone 8 Plus', 'iPhone SE',
+    'iPhone SE (2nd generation)', 'iPhone SE (3rd generation)', 'iPad Pro', 'iPhone 99 Pro', 'iPhone17,3']) {
+    // Switch from a known island phone to ensure fallback also removes its decoration.
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 15 Pro' } }) });
+    h.app.ontoolresult({ structuredContent: preview({ device: { model } }) });
+    assert.equal(h.elements.device.dataset.appearance, 'plain', model);
+    assert.equal(h.elements.device.style['--bezel'], '0px', model);
+    assert.equal(h.elements.device.style['--screen-radius'], '0px', model);
+    const mask = decodeURIComponent(h.elements.device.style['--glow-mask']);
+    assert.ok(mask.includes("rx='0'"), model);
+    assert.ok(!mask.includes("stroke-width='0'"), 'Operation feedback stays visible on plain screens');
+  }
+});
+
+test('plain portrait and landscape screens preserve the complete frame and gesture coordinates', async () => {
+  const h = await harness();
+  let seq = 0;
+  for (const [width, height] of [[750, 1334], [1334, 750]]) {
+    h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 8' }, frame: { ...frame(++seq), width, height },
+      viewport: { width: width / 2, height: height / 2 }, events: [
+        { id: seq, kind: 'tap', at: 1000, point: { x: width / 8, y: height / 4 } },
+      ] }) });
+    const displayWidth = parseFloat(h.elements.device.style.width);
+    const displayHeight = parseFloat(h.elements.device.style.height);
+    assert.ok(Math.abs(displayWidth / displayHeight - width / height) < 1e-8);
+    assert.ok(displayWidth <= h.stageSize.width && displayHeight <= h.stageSize.height);
+    assert.equal(h.elements.cursor.style.left, '25%');
+    assert.equal(h.elements.cursor.style.top, '50%');
+    assert.equal(h.elements.device.dataset.orientation, width > height ? 'landscape' : 'portrait');
+  }
+});
+
+test('late model metadata refits the current frame, survives pauses and resets for a replacement stream', async () => {
+  const h = await harness();
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'first', frame: frame(1) }) });
+  const source = h.elements.image.src;
+  const initialLayouts = h.layoutReads;
+  h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 15 Pro' } }) });
+  assert.equal(h.elements.device.dataset.appearance, 'dynamic-island');
+  assert.equal(h.layoutReads, initialLayouts + 1);
+  assert.equal(h.elements.image.src, source);
+  for (const device of [{ model: 'iPhone 15 Pro' }, null, undefined]) {
+    h.app.ontoolresult({ structuredContent: preview({ device }) });
+    assert.equal(h.elements.device.dataset.appearance, 'dynamic-island');
+  }
+  assert.equal(h.layoutReads, initialLayouts + 1);
+  h.app.ontoolresult({ structuredContent: preview({ paused: true }) });
+  assert.equal(h.elements.device.dataset.appearance, 'dynamic-island');
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'second', frame: frame(1), device: null }) });
+  assert.equal(h.elements.model.textContent, 'iPhone');
+  assert.equal(h.elements.device.dataset.appearance, 'plain');
+  h.app.ontoolresult({ structuredContent: preview({ device: { model: 'iPhone 14' } }) });
+  assert.equal(h.elements.device.dataset.appearance, 'rounded');
+  h.app.ontoolresult({ structuredContent: preview({ stream_id: 'third', device: { model: 'iPhone 15' } }) });
+  assert.equal(h.elements.model.textContent, 'iPhone 15');
+  assert.equal(h.elements.device.dataset.appearance, 'dynamic-island');
 });
 
 test('status pill names the phone model and follows the stream state', async () => {
@@ -600,7 +747,7 @@ test('status pill names the phone model and follows the stream state', async () 
   h.app.ontoolresult({ structuredContent: preview({ paused: true, pause_reason: 'device_locked' }) });
   assert.equal(h.elements['live-text'].textContent, '等待解锁');
   assert.match(h.elements['live-text'].title, /刷新/);
-  assert.equal(h.elements.image.src, undefined);
+  assert.equal(h.elements.image.src, 'data:image/png;base64,test-image-only');
   h.app.ontoolresult({ structuredContent: preview({ paused: true, pause_reason: 'authentication' }) });
   assert.equal(h.elements['live-text'].textContent, '已暂停');
   h.app.ontoolresult({ structuredContent: preview({ frame: frame(2), frame_available: true }) });
@@ -713,4 +860,227 @@ test('host theme is applied and followed, and teardown releases the toolbar', as
   h.elements['tool-home'].click();
   await flush();
   assert.equal(h.calls.length, before);
+});
+
+function pointerEvent(x, y, extra = {}) {
+  return { clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, preventDefault() {}, ...extra };
+}
+async function livePointerHarness(options) {
+  const h = await harness(options);
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(), viewport: { width: 400, height: 800 } }) });
+  h.elements.image.onload();
+  h.pointer = (name, x, y, extra) => h.elements.screen.handlers.get(name)?.(pointerEvent(x, y, extra));
+  return h;
+}
+test('Japanese pointer feedback preserves errors and never replays uncertain input', async () => {
+  for (const [error, expected] of [
+    [{ code: 'action_uncertain', uncertain: true }, '操作結果を確認できません。iPhoneの状態を見てから操作してください'],
+    [{ code: 'phone_locked' }, '先にiPhoneのロックを解除してください'],
+    [{ code: 'stale_viewport' }, '画面の向きが変わりました。新しい画面をお待ちください'],
+    [{ code: 'other' }, '操作が完了しませんでした。iPhoneの状態を確認してください'],
+    [null, '操作結果を確認できません。iPhoneの状態を見てから操作してください'],
+  ]) {
+    const h = await livePointerHarness({ language: 'ja', reply: () => error
+      ? Promise.resolve({ isError: true, structuredContent: { error } })
+      : Promise.reject(new Error('transport lost')) });
+    assert.equal(h.elements.screen.title, 'クリックでiPhoneを操作。ドラッグまたはトラックパッドの2本指スワイプでスクロール・ページ移動');
+    h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+    assert.equal(h.elements.toast.textContent, expected);
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+    assert.equal(h.calls[0].arguments.action, 'tap');
+    await h.app.onteardown();
+  }
+});
+test('pointer click and drag map scaled screen coordinates and dispatch once', async () => {
+  const h = await livePointerHarness();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  const taps = h.calls.filter(c => c.name === 'pua_screen_action');
+  assert.equal(JSON.stringify(taps[0].arguments), JSON.stringify({ action: 'tap', x: 100, y: 200, width: 400, height: 800 }));
+  h.app.ontoolresult({structuredContent: preview({frame_available:true})});
+  h.elements.image.onload();
+  h.pointer('pointerdown', 110, 320); h.pointer('pointerup', 110, 120); await flush();
+  const drag = h.calls.filter(c => c.name === 'pua_screen_action')[1].arguments;
+  assert.equal(drag.action, 'drag'); assert.equal(drag.y, 600); assert.equal(drag.to_y, 200);
+});
+test('pointer cancellation, secondary buttons, outside release and pause send nothing', async () => {
+  for (const scenario of ['cancel', 'outside', 'right', 'pause', 'rotate', 'hidden', 'multi']) {
+    const h = await livePointerHarness();
+    h.pointer('pointerdown', 60, 120, scenario === 'right' ? { button: 2 } : {});
+    if (scenario === 'cancel') h.pointer('pointercancel', 60, 120);
+    if (scenario === 'multi') h.pointer('pointerdown', 60, 120, { isPrimary: false, pointerId: 2 });
+    if (scenario === 'pause') h.app.ontoolresult({ structuredContent: preview({ paused: true }) });
+    if (scenario === 'rotate') h.app.ontoolresult({ structuredContent: preview({ viewport: { width: 800, height: 400 } }) });
+    if (scenario === 'hidden') h.visibility(true);
+    h.pointer('pointerup', scenario === 'outside' ? 400 : 60, 120); await flush();
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0, scenario);
+  }
+});
+test('pointer input requires a decoded live frame and cannot queue during a mutation', async () => {
+  const h = await livePointerHarness();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120);
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+});
+
+test('letterboxed margins are excluded and resized image coordinates stay accurate', async () => {
+  const h = await livePointerHarness();
+  h.elements.screen.getBoundingClientRect = () => ({ left: 10, top: 20, width: 400, height: 400 });
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0);
+  h.pointer('pointerdown', 160, 120); h.pointer('pointerup', 160, 120); await flush();
+  const tap = h.calls.find(c => c.name === 'pua_screen_action').arguments;
+  assert.equal(tap.x, 100); assert.equal(tap.y, 200);
+});
+test('a failed image decode and busy preview reject pointer input', async () => {
+  for (const scenario of ['decode', 'busy', 'offline']) {
+    const h = await livePointerHarness();
+    if (scenario === 'decode') { h.elements.image.onerror(); h.elements.image.onload(); }
+    if (scenario === 'busy') h.app.ontoolresult({ structuredContent: preview({ busy: true }) });
+    if (scenario === 'offline') h.app.ontoolresult({ structuredContent: preview({ frame_available: false }) });
+    h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+    assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 0, scenario);
+  }
+});
+test('mutation failure warns once without automatic replay', async () => {
+  const h = await harness({reply: params => params.name === 'pua_screen_action'
+    ? Promise.reject(new Error('timeout')) : Promise.resolve({structuredContent:preview()})});
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(), viewport: { width: 400, height: 800 } }) });
+  h.elements.image.onload();
+  h.elements.screen.handlers.get('pointerdown')(pointerEvent(60,120));
+  h.elements.screen.handlers.get('pointerup')(pointerEvent(60,120)); await flush();
+  assert.match(h.elements.toast.textContent, /结果不确定/);
+  await h.tick(); await h.tick();
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_action').length, 1);
+});
+
+test('static fresh stream remains interactive without decoding duplicate frames', async () => {
+  const h = await livePointerHarness();
+  h.app.ontoolresult({structuredContent:preview({frame_available:true,frame_age_ms:50})});
+  h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+  assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,1);
+});
+test('retained stale stream and missing heartbeat metadata block input', async () => {
+  for (const age of [2500, null, undefined]) {
+    const h = await livePointerHarness();
+    h.app.ontoolresult({structuredContent:preview({frame_available:true,frame_age_ms:age})});
+    h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,0);
+  }
+});
+
+
+test('cosmetic busy afterglow does not block input, but an active operation does', async () => {
+  for (const input_busy of [false, true]) {
+    const h = await livePointerHarness();
+    h.app.ontoolresult({structuredContent:preview({busy:true,input_busy})});
+    h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,input_busy ? 0 : 1);
+  }
+});
+test('completed gesture replaces the pending poll with an immediate refresh', async () => {
+  const h = await livePointerHarness();
+  await h.tick();
+  h.pointer('pointerdown',60,120); h.pointer('pointerup',60,120); await flush();
+  assert.equal(Math.min(...[...h.timers.values()].map(t=>t.delay)),0);
+});
+
+function wheelEvent(deltaX, deltaY, extra = {}) {
+  return { clientX:110, clientY:220, deltaX, deltaY, deltaMode:0,
+    preventDefault() { this.prevented = true; }, ...extra };
+}
+test('trackpad wheel maps all four directions to bounded centered swipes', async () => {
+  for (const [dx,dy] of [[0,60],[0,-60],[60,0],[-60,0]]) {
+    const h = await livePointerHarness();
+    const event = wheelEvent(dx,dy);
+    h.elements.screen.handlers.get('wheel')(event); await flush();
+    const args = h.calls.find(c=>c.name==='pua_screen_action').arguments;
+    assert.equal(args.action,'drag'); assert.equal(event.prevented,true);
+    assert.equal(Math.sign(args.to_x-args.x), dx ? -Math.sign(dx) : 0);
+    assert.equal(Math.sign(args.to_y-args.y), dy ? -Math.sign(dy) : 0);
+    assert.ok(args.x>0 && args.to_x<400 && args.y>0 && args.to_y<800);
+  }
+});
+test('wheel accumulates small deltas and consumes momentum even after action completes', async () => {
+  const h = await livePointerHarness();
+  const wheel = h.elements.screen.handlers.get('wheel');
+  wheel(wheelEvent(0,10)); wheel(wheelEvent(0,10));
+  assert.equal(h.calls.length,0);
+  wheel(wheelEvent(0,10)); await flush();
+  h.app.ontoolresult({structuredContent:preview({frame_available:true})});
+  for(let i=0;i<15;i++) { h.advance(80); wheel(wheelEvent(0,50)); }
+  assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,1);
+  h.advance(181); wheel(wheelEvent(0,-50)); await flush();
+  assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,2);
+});
+test('wheel rejects pinch, stale frames, busy device, margins and pointer overlap', async () => {
+  for (const scenario of ['pinch','stale','busy','margin','pointer','hidden']) {
+    const h=await livePointerHarness();
+    if(scenario==='stale') h.advance(2500);
+    if(scenario==='busy') h.app.ontoolresult({structuredContent:preview({input_busy:true})});
+    if(scenario==='pointer') h.pointer('pointerdown',110,220);
+    if(scenario==='hidden') h.visibility(true);
+    h.elements.screen.handlers.get('wheel')(wheelEvent(0,100,{
+      ctrlKey:scenario==='pinch',clientX:scenario==='margin'?500:110})); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,0,scenario);
+  }
+});
+test('wheel normalizes line/page input and removes listener on teardown', async () => {
+  for(const mode of [1,2]) {
+    const h=await livePointerHarness();
+    h.elements.screen.handlers.get('wheel')(wheelEvent(0,2,{deltaMode:mode})); await flush();
+    assert.equal(h.calls.filter(c=>c.name==='pua_screen_action').length,1);
+    await h.app.onteardown();
+    assert.equal(h.elements.screen.handlers.has('wheel'),false);
+  }
+});
+
+test('new frames reject input until their own load, including late loads from replaced frames', async () => {
+  const h = await livePointerHarness();
+  const oldLoad = h.elements.image.onload;
+  h.app.ontoolresult({ structuredContent: preview({ frame: frame(2) }) });
+  oldLoad(); // Even the same data URL belongs to a different frame generation.
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120);
+  h.elements.screen.handlers.get('wheel')({ ...pointerEvent(110,220), deltaY: 80, deltaX: 0, deltaMode: 0 });
+  await flush();
+  assert.equal(h.calls.length, 0);
+  h.elements.image.onload();
+  h.pointer('pointerdown', 60, 120); h.pointer('pointerup', 60, 120); await flush();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'tap').length, 1);
+});
+
+test('polling recovers rotated viewport and restores input without another phone tool', async () => {
+  let resolveViewport;
+  const h = await harness({ reply: params => params.arguments.action === 'viewport'
+    ? new Promise(resolve => { resolveViewport = resolve; })
+    : Promise.resolve({ structuredContent: preview({ frame_available: true,
+        frame: { ...frame(2), width: 1800, height: 900 }, viewport: { width: 400, height: 800 } }) }) });
+  await h.tick();
+  h.elements.image.onload();
+  const click = () => {
+    h.elements.screen.handlers.get('pointerdown')(pointerEvent(110,220));
+    h.elements.screen.handlers.get('pointerup')(pointerEvent(110,220));
+  };
+  click(); await flush();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'tap').length, 0);
+  resolveViewport({ structuredContent: { viewport: { width: 800, height: 400 } } });
+  await flush(); click(); await flush();
+  const tap = h.calls.find(c => c.arguments.action === 'tap');
+  assert.equal(tap.arguments.width, 800);
+  assert.equal(tap.arguments.height, 400);
+  assert.equal(tap.arguments.x, 400);
+  assert.equal(tap.arguments.y, 200);
+});
+
+test('viewport recovery failures are throttled while frame polling continues', async () => {
+  const h = await harness({ reply: params => Promise.resolve(params.arguments.action === 'viewport'
+    ? { isError: true }
+    : { structuredContent: preview({ frame_available: true,
+        frame: { ...frame(), width: 1800, height: 900 }, viewport: { width: 400, height: 800 } }) }) });
+  await h.tick();
+  for (let i = 0; i < 7; i++) await h.tick();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 1);
+  assert.equal(h.calls.filter(c => c.name === 'pua_screen_frame').length, 8);
+  await h.tick();
+  assert.equal(h.calls.filter(c => c.arguments.action === 'viewport').length, 2);
 });

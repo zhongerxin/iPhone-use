@@ -1,12 +1,15 @@
 import contextlib
+import errno
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import sys
+import socket
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 from wda_client import SESSION_SETTINGS, WDAClient, WDAError
@@ -163,11 +166,99 @@ class ClientTests(unittest.TestCase):
                     client.session("POST", "/wda/tap", {"x": 100, "y": 200})
                 self.assertEqual(caught.exception.code, "action_uncertain")
                 self.assertTrue(caught.exception.uncertain)
+                self.assertEqual(caught.exception.details["transport_error"], "pua_timeout")
+                self.assertEqual(caught.exception.details["recovery"]["next_tool"], "pua_observe")
+                self.assertFalse(caught.exception.details["recovery"]["replay_action"])
                 self.assertIsNone(client.connection)
                 self.assertEqual(len(requests), 1)
                 self.assertEqual(client.records[-1]["endpoint"], "/session/:id/wda/tap")
             finally:
                 client.close()
+
+    def test_read_timeout_is_not_replayed_and_a_later_read_can_recover(self):
+        def respond(method, path, body, requests):
+            return 200, {"value": "xml"}, 0.15 if len(requests) == 1 else 0, False
+
+        with fake_server(respond) as (url, requests, _):
+            client = WDAClient(url, timeout=0.025)
+            try:
+                with self.assertRaises(WDAError) as caught:
+                    client.request("GET", "/source")
+                error = caught.exception.as_dict()
+                self.assertEqual(error["code"], "pua_timeout")
+                self.assertFalse(error["uncertain"])
+                self.assertEqual(error["transport_error"], "pua_timeout")
+                self.assertEqual(error["recovery"]["next_tool"], "pua_observe")
+                self.assertEqual(error["recovery"]["next_arguments"], {"mode": "screenshot"})
+                self.assertGreater(error["recovery"]["retry_after_seconds"], 0)
+                self.assertEqual(error["recovery"]["max_wait_retries"], 2)
+                self.assertFalse(error["recovery"]["replay_action"])
+                self.assertIsNone(client.connection)
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(client.records[-1]["error"], "pua_timeout")
+                self.assertEqual(client.request("GET", "/source", timeout=0.5)["value"], "xml")
+                self.assertEqual(len(requests), 2)
+            finally:
+                client.close()
+
+    def test_expired_deadline_is_a_timeout_without_a_network_request(self):
+        client = WDAClient()
+        with patch("wda_client.time.monotonic", return_value=100), \
+                patch("wda_client.http.client.HTTPConnection") as connect, \
+                self.assertRaises(WDAError) as caught:
+            client.request("GET", "/source", timeout=0)
+        self.assertEqual(caught.exception.code, "pua_timeout")
+        self.assertFalse(caught.exception.uncertain)
+        connect.assert_not_called()
+
+    def test_body_reads_share_the_original_response_deadline(self):
+        clock = [100.0]
+        connection = Mock()
+        response = connection.getresponse.return_value
+        response.status = 200
+        response.isclosed.return_value = False
+        def read_chunk(size):
+            clock[0] += 0.04
+            return b" "
+        response.read1.side_effect = read_chunk
+        client = WDAClient(timeout=0.08)
+        with patch("wda_client.time.monotonic", side_effect=lambda: clock[0]), \
+                patch("wda_client.http.client.HTTPConnection", return_value=connection) as connect, \
+                self.assertRaises(WDAError) as caught:
+            client.request("GET", "/source")
+        self.assertEqual(caught.exception.code, "pua_timeout")
+        self.assertEqual(response.read1.call_count, 2)
+        connect.assert_called_once()
+        connection.request.assert_called_once()
+        connection.close.assert_called_once()
+        self.assertIsNone(client.connection)
+
+    def test_transport_failures_distinguish_timeout_disconnect_and_unknown(self):
+        cases = [(socket.timeout("slow"), "pua_timeout"),
+                 (OSError(errno.ETIMEDOUT, "slow"), "pua_timeout"),
+                 (ConnectionRefusedError(errno.ECONNREFUSED, "refused"), "pua_unreachable"),
+                 (ConnectionResetError(errno.ECONNRESET, "reset"), "pua_unreachable"),
+                 (BrokenPipeError(errno.EPIPE, "closed"), "pua_unreachable"),
+                 (http.client.RemoteDisconnected("closed"), "pua_unreachable"),
+                 (http.client.IncompleteRead(b"partial", 10), "pua_unreachable"),
+                 (OSError(errno.EIO, "unknown"), "pua_transport_error"),
+                 (http.client.BadStatusLine("invalid"), "pua_transport_error")]
+        for fault, kind in cases:
+            for method in ("GET", "POST"):
+                with self.subTest(fault=type(fault).__name__, method=method):
+                    connection = Mock()
+                    connection.request.side_effect = fault
+                    client = WDAClient()
+                    with patch("wda_client.http.client.HTTPConnection", return_value=connection), \
+                            self.assertRaises(WDAError) as caught:
+                        client.request(method, "/source" if method == "GET" else "/wda/tap", {})
+                    error = caught.exception.as_dict()
+                    self.assertEqual(error["code"], kind if method == "GET" else "action_uncertain")
+                    self.assertEqual(error["transport_error"], kind)
+                    self.assertEqual(error["uncertain"], method == "POST")
+                    self.assertFalse(error["recovery"]["replay_action"])
+                    self.assertEqual(error["recovery"]["next_tool"], "pua_observe" if kind == "pua_timeout" else "pua_setup")
+                    self.assertEqual(connection.request.call_count, 1 if kind == "pua_timeout" or method == "POST" else 2)
 
     def test_non_session_read_error_does_not_trigger_retry(self):
         def respond(method, path, body, requests):
@@ -327,6 +418,8 @@ class ClientTests(unittest.TestCase):
                             client.session("POST", path, {})
                         self.assertTrue(caught.exception.uncertain)
                         self.assertEqual(caught.exception.code, "action_uncertain")
+                        self.assertEqual(caught.exception.details["transport_error"], "pua_unreachable")
+                        self.assertEqual(caught.exception.details["recovery"]["next_tool"], "pua_setup")
                         self.assertEqual(len(requests), 1)
                     finally:
                         client.close()
@@ -411,11 +504,11 @@ class ClientTests(unittest.TestCase):
                     finally:
                         client.close()
 
-    def test_settings_failure_keeps_session_and_is_not_replayed(self):
+    def test_settings_backend_failure_keeps_session_and_is_not_replayed(self):
         def respond(method, path, body, requests):
             if path == "/session":
                 return 200, {"value": {"sessionId": "created"}}, 0, False
-            return None, None, 0, True
+            return 500, {"value": {"error": "unknown error", "message": "Settings rejected"}}, 0, False
 
         with fake_server(respond) as (url, requests, _):
             client = WDAClient(url)
@@ -423,12 +516,63 @@ class ClientTests(unittest.TestCase):
                 for _ in range(2):
                     with self.assertRaises(WDAError) as caught:
                         client.ensure_session()
+                    self.assertEqual(caught.exception.code, "unknown error")
                     self.assertEqual(caught.exception.details["operation"], "session_settings")
                     self.assertTrue(caught.exception.details["session_created"])
                     self.assertFalse(caught.exception.details["settings_applied"])
                     self.assertFalse(caught.exception.details["settings_replayed"])
                 self.assertEqual(client.session_id, "created")
                 self.assertEqual(len(requests), 2)
+            finally:
+                client.close()
+
+    def test_settings_disconnect_reapplies_only_on_a_later_call(self):
+        def respond(method, path, body, requests):
+            if path == "/session":
+                return 200, {"value": {"sessionId": "created"}}, 0, False
+            if len(requests) == 2:
+                return None, None, 0, True
+            return 200, {"value": {}}, 0, False
+
+        with fake_server(respond) as (url, requests, _):
+            client = WDAClient(url)
+            try:
+                with self.assertRaises(WDAError) as caught:
+                    client.session("POST", "/wda/tap", {"x": 100, "y": 200})
+                self.assertEqual(caught.exception.details["transport_error"], "pua_unreachable")
+                self.assertEqual(caught.exception.details["recovery"]["next_tool"], "pua_setup")
+                self.assertFalse(caught.exception.details["action_executed"])
+                self.assertEqual(client.session_id, "created")
+                self.assertEqual(len(requests), 2)
+                self.assertEqual(client.ensure_session(), "created")
+                self.assertIsNone(client._settings_error)
+                self.assertEqual([path for _, path, _ in requests], [
+                    "/session", "/session/created/appium/settings", "/session/created/appium/settings"])
+            finally:
+                client.close()
+
+    def test_settings_timeout_recovers_on_a_later_call_without_recreating_session_or_action(self):
+        def respond(method, path, body, requests):
+            if path == "/session":
+                return 200, {"value": {"sessionId": "created"}}, 0, False
+            first_settings = path.endswith("/appium/settings") and sum(route == path for _, route, _ in requests) == 1
+            return 200, {"value": "xml"}, 0.15 if first_settings else 0, False
+
+        with fake_server(respond) as (url, requests, _):
+            client = WDAClient(url, timeout=0.025)
+            try:
+                with self.assertRaises(WDAError) as caught:
+                    client.session("POST", "/wda/tap", {"x": 100, "y": 200})
+                self.assertEqual(caught.exception.details["transport_error"], "pua_timeout")
+                self.assertEqual(caught.exception.details["operation"], "session_settings")
+                self.assertFalse(caught.exception.details["action_executed"])
+                self.assertEqual(client.session_id, "created")
+                self.assertIsNone(client._settings_session_id)
+                self.assertEqual([path for _, path, _ in requests], ["/session", "/session/created/appium/settings"])
+                self.assertEqual(client.session("GET", "/source", timeout=0.5), "xml")
+                self.assertIsNone(client._settings_error)
+                self.assertEqual([path for _, path, _ in requests], [
+                    "/session", "/session/created/appium/settings", "/session/created/appium/settings", "/session/created/source"])
             finally:
                 client.close()
 
@@ -446,6 +590,68 @@ class ClientTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, "invalid session id")
                 self.assertIsNone(client.session_id)
                 self.assertEqual(len(requests), 2)
+            finally:
+                client.close()
+
+    def test_deferred_snapshot_restore_precedes_raw_and_session_queries(self):
+        for method, path, session in (("GET", "/wda/activeAppInfo", False),
+                                      ("GET", "/screenshot", False),
+                                      ("GET", "/source", True),
+                                      ("POST", "/wda/tap", True)):
+            with self.subTest(path=path):
+                def respond(method, route, body, requests):
+                    return 200, {"value": {}}, 0, False
+
+                with fake_server(respond) as (url, requests, _):
+                    client = WDAClient(url)
+                    self.warm_session(client, "existing")
+                    try:
+                        client.reapply_settings({"snapshotMaxDepth": 42, "snapshotMaxChildren": 900})
+                        self.assertEqual(requests, [])
+                        call = client.session if session else client.request
+                        call(method, path, {"x": 100, "y": 200} if method == "POST" else None)
+                        self.assertEqual(requests[0], ("POST", "/session/existing/appium/settings",
+                            {"settings": {**SESSION_SETTINGS, "snapshotMaxDepth": 42, "snapshotMaxChildren": 900}}))
+                        self.assertEqual(len(requests), 2)
+                        self.assertEqual(client._settings_restore, {})
+                    finally:
+                        client.close()
+
+    def test_status_does_not_flush_deferred_snapshot_restore(self):
+        def respond(method, path, body, requests):
+            return 200, {"value": {"ready": True}}, 0, False
+
+        with fake_server(respond) as (url, requests, _):
+            client = WDAClient(url)
+            self.warm_session(client, "existing")
+            try:
+                client.reapply_settings({"snapshotMaxChildren": 1000})
+                self.assertTrue(client.request("GET", "/status")["value"]["ready"])
+                self.assertEqual([path for _, path, _ in requests], ["/status"])
+                self.assertEqual(client._settings_restore, {"snapshotMaxChildren": 1000})
+            finally:
+                client.close()
+
+    def test_failed_deferred_restore_blocks_queries_and_remains_pending(self):
+        def respond(method, path, body, requests):
+            return 200, {"value": {}}, 0.15 if len(requests) == 1 else 0, False
+
+        with fake_server(respond) as (url, requests, _):
+            client = WDAClient(url, timeout=0.025)
+            self.warm_session(client, "existing")
+            try:
+                restore = {"snapshotMaxChildren": 1000}
+                client.reapply_settings(restore)
+                with self.assertRaises(WDAError) as caught:
+                    client.request("GET", "/wda/activeAppInfo")
+                self.assertFalse(caught.exception.details["action_executed"])
+                self.assertEqual(caught.exception.details["transport_error"], "pua_timeout")
+                self.assertEqual(client._settings_restore, restore)
+                self.assertEqual(len(requests), 1)
+                client.request("GET", "/wda/activeAppInfo", timeout=0.5)
+                self.assertEqual([path for _, path, _ in requests], [
+                    "/session/existing/appium/settings", "/session/existing/appium/settings", "/wda/activeAppInfo"])
+                self.assertEqual(client._settings_restore, {})
             finally:
                 client.close()
 

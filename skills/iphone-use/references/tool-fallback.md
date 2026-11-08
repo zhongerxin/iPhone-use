@@ -2,7 +2,7 @@
 
 优先调用封装好的工具，默认乐观执行常规动作，下一步需要信息时顺带判断上一动作。工具绑定缺失、宿主转发错误或已确认的封装问题不等于 PUA 不可用；可对同一已授权动作使用插件代码入口。代码回退保留相同的配置、会话、操作锁和明确异常处理，不新增每步验收。
 
-普通版提供 17 个模型工具；先查看本回合实际可调用的工具绑定（支持时用 ALL_TOOLS 或工具搜索），不能只从 tools/list、文档或先前聊天推断已经绑定。0.1.6 的 install.sh 同时注册同名标准 MCP，避免 Codex 插件共享说明预算隐藏工具，并保留完整 batch schema。新版安装后重新连接聊天；实际仍缺少所需工具时才用下面的代码入口继续，不默认把已封装操作都改成 CLI。
+普通版提供 18 个模型工具；先查看本回合实际可调用的工具绑定（支持时用 ALL_TOOLS 或工具搜索），不能只从 tools/list、文档或先前聊天推断已经绑定。0.1.6 的 install.sh 同时注册同名标准 MCP，避免 Codex 插件共享说明预算隐藏工具，并保留完整 batch schema。新版安装后重新连接聊天；实际仍缺少所需工具时才用下面的代码入口继续，不默认把已封装操作都改成 CLI。
 
 ## 先区分错误
 
@@ -13,8 +13,11 @@
 - `input_continuation_expired`：长文本续传已失效，本次没有输入任何内容。读取字段实际文字，用 `replace=false` 只补缺少的部分。
 - `occluded_target` / `offscreen_target`：目标点击没有执行，不能推断未执行点击打开了浮层。`occluded_target` 按附带截图判断：目标可见就按 `tap_point` 用坐标点击，确有遮挡先处理遮挡；`offscreen_target` 先向目标滑动。自绘半屏面板可能没有原生 Alert / Sheet 节点，按真实截图判断。
 - 显式验收的 `postcondition_failed`：动作已接收但验收条件未满足，查看实际状态再决定剩余步骤，不因验收失败自动重放动作。
-- `action_executed=true, action_complete=false`、`uncertain=true` 或动作后 timeout：至少部分动作可能已生效。输入、发送、提交、删除等先看真实字段 / 记录，不能切换代码入口后盲目再做。
-- 查询短暂失败：工具可有界重读一次；POST 查询接口不应按 mutation 处理，查询失效不证明手机动作已执行。
+- `action_executed=true, action_complete=false`、`action_uncertain`、`uncertain=true` 或动作后 timeout：至少部分动作可能已生效。`action_uncertain.transport_error` 区分下面三类传输问题，按 recovery 等待或检查连接，再观察真实字段 / 记录；不能切换代码入口后盲目再做输入、发送、提交、删除或整个批次。
+- `pua_timeout`：socket 等待或调用预算耗尽，不证明断连。按返回的 `retry_after_seconds` 在宿主侧等待（当前为 2 秒），再取一次 `pua_observe(mode="screenshot")`，不要立即重试整树或动作，也不用 `pua_wait`（它会新增 AX 查询）。截图仍超时最多再延迟尝试一次，之后调用 `pua_setup(action="status")` 诊断；重复超时本身不授权重启。若原调用是 READY，用相同参数延迟重试 READY，而不是换成观察、start 或 recover。
+- `pua_unreachable`：连接拒绝、连接重置、管道关闭或 EOF 等 HTTP 通道连接失败。调用 `pua_setup(action="status")`，复用当前 start / recover 工作；确认服务未运行且已配置、没有活动工作、用户允许启动时才 start 一次。连接失败本身不证明物理 USB 已拔出。
+- `pua_transport_error`：其他传输或协议异常，按返回细节检查 setup status / 日志，不当作超时或确定断连，也不自动重启或重放动作。
+- 查询失败不证明手机动作已执行，POST 查询接口不应按 mutation 处理；查询超时不自动立即重读，遵循上述有界延迟恢复。
 - `local.pid.0`、`pua_foreground_unavailable` 或 XCTest Code 41：通道故障，调用 READY 恢复；不要通过更改 selector 或重复手机按钮处理。锁屏、签名和信任问题按 setup skill；App 密码 / Face ID 按认证接管。
 
 通过 `functions.exec` 时逐个内容块转发：文字用 `text(block.text)`，图片用 `image(block)`；不要 `text(result)` 把截图变成 base64 文本。图片无法转发时用 `view_image` 打开 `image.path` / `error.observation.image.path`。坐标按 `pixel_to_point` 换算。
@@ -26,6 +29,8 @@ Home 使用手机端专用主屏幕端点。默认不单独等待 SpringBoard；
 ## READY 的有界恢复
 
 正常任务用 `pua_ready(recover=true)` 或省略 recover。false 仅用于用户明确禁止重启或只读诊断，保留该限制。暂时失效前台只清理旧观察 / 会话并重读一次；持续故障才重启已核验归属的本插件服务，复用有效构建。不会重放导航、输入或提交。
+
+READY 的 `pua_timeout` 不进入重启流程：按 `retry_after_seconds` 在宿主侧等待，再用相同参数重试，最多两次延迟尝试；仍超时只查询 setup status 与日志。不得用 `pua_wait` 代替宿主等待，不因累计超时自动 start / recover。`pua_unreachable` 才进入连接 / 启动检查；`pua_transport_error` 按具体诊断处理。
 
 `ready=false, state="recovering"` 携带 recovery.job_id 和查询参数。status 返回 `jobs` 数组，找到 id 与 job_id 相等的工作；检查 recovery_phase，从 stopping / starting 到 serving 后重验 READY。Runner 可以长期 running，不等 succeeded、不重复 start。按阶段、日志和 retry_after_seconds 查询，不写固定 15 秒 × 20 次的等待循环，也不能读取不存在的单个 job 并吞掉解析异常。
 

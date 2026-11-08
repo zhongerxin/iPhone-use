@@ -13,11 +13,13 @@ description: PUA（Phone Use Agent）のMCPツールで実機のiPhoneを操作�
 
 ## READYと認証
 
-新しいチャットで最初にiPhoneを使うときは、先に`pua_setup(action="status")`を呼び、[起動と復旧](references/startup.ja.md)に従って正常なサービスか活動中のジョブを再利用する。必要なサービスがなければstartを一度だけ呼ぶ。サービスが使える状態になってから`pua_ready(recover=true, screenshot=false)`を呼ぶ。READYの失敗を待ってからsetupを始めない。文字の作業ではstatus、session、tree、viewport、ロック解除の確認を残し、不要な画像は取らない。このチャットですでにREADYで接続が正常なら再利用する。`recover=false`はユーザーが再起動を明示的に禁止した場合や読み取り専用の診断を求めた場合に限り、制限を守る。
+新しいチャットで最初にiPhoneを使うときは、先に`pua_setup(action="status")`を呼び、[起動と復旧](references/startup.ja.md)に従って正常なサービスか活動中のジョブを再利用する。サービスの停止が確認でき、対応する活動ジョブがない場合だけstartを一度呼ぶ。サービスが使える状態になってから`pua_ready(recover=true, screenshot=false)`を呼ぶ。READYの失敗を待ってからsetupを始めない。文字の作業ではstatus、session、tree、viewport、ロック解除の確認を残し、不要な画像は取らない。このチャットですでにREADYで接続が正常なら再利用する。`recover=false`はユーザーが再起動を明示的に禁止した場合や読み取り専用の診断を求めた場合に限り、制限を守る。
 
 - `ready=true, state="ready"`：その`observation`を次の判断に使う。直後にobserve、doctor、移動テストを重複実行しない。
 - `ready=false, state="recovering"`または`state="recovery_required"`：errorがなくMCPのisErrorがfalseでも、操作可能という意味ではない。[起動と復旧](references/startup.ja.md)に従い同じジョブを調べる。
-- `pua_unreachable`、接続拒否、`not_ready`などの未起動：`recover=true`は停止中サービスのコールドスタートを行わない。`pua_setup(action="status")`で活動中のstart／recoverを再利用するか、設定済みで該当ジョブがなければstartを一度呼び、READYを再確認する。設定・ソース・ビルドが不足するときは`iphone-use-setup`を読む。
+- `pua_unreachable`、接続拒否、`not_ready`などの未起動：`recover=true`は停止中サービスのコールドスタートを行わない。`pua_setup(action="status")`で活動中のstart／recoverを再利用するか、設定済みでサービス停止を確認でき、該当ジョブがない場合だけstartを一度呼び、READYを再確認する。接続失敗やservice.ready=falseだけでは停止を証明しない。設定・ソース・ビルドが不足するときは`iphone-use-setup`を読む。
+
+`pua_timeout`では[起動と復旧](references/startup.ja.md)に従い、ホスト側で待ってからREADYまたは画像取得を上限付きで再試行する。直ちにstart／recoverや遅いツリー照会を繰り返さず、`pua_wait`を通信待ちに使わない。`pua_transport_error`は具体的な診断に従う。
 
 読み取り専用、起動・再起動禁止などの指示を守る。復旧後の新しいREADY観察から元の作業の進捗を確認し、すでに有効になった可能性がある操作を再実行しない。
 
@@ -34,6 +36,10 @@ READYは画面サイドバーに関連付けられ、ホストが対応する場
 一意な対象と既知の経路では`observe="none"`を使い、連続実行またはbatchにまとめる。未知のページ、領域、内容を次に判断するなら、その操作で`observe="tree"`、`"screenshot"`、`"both"`を指定して返された`observation`を使う。noneの後で専用の確認observeを挟まない。独立した読み取りは`pua_observe(mode=...)`を使い、modeとobserveを混同しない。
 
 要素の`type`は`XCUIElementType`を省略し、`rect`は`[x, y, width, height]`（iPhoneのポイント）。name省略はlabelと同じ、value省略は文字と同じ、enabled／visible／in_viewport省略はtrueを意味する。通常は`include_invisible=false`、`max_nodes=200`、`expensive_visibility=false`。単一対象の確認は`pua_find`／`pua_wait`を使う。ツリーが切れていることや視野内の要素は、全件取得や遮蔽なしを証明しない。固定ヘッダーや浮いたパネルが覆う場合がある。
+
+ネイティブAX快照の既定深度は50で、子要素数はネイティブ既定のまま追加制限しない。独立した`pua_observe(mode="tree" / "both", snapshot_max_depth=...)`で1..62の単発深度を指定できる。低深度は可視文字や要素も省略するため、欠落や`truncated=false`から対象が存在しないと判断しない。画像の情報がツリーにない場合は50で読み直し、必要な範囲を照合する。成功後は深度50に戻り、timeoutやプロセス中断時は未復元設定を記録して次のネイティブ照会・操作前に復元する。通常観察、操作後観察、リスト収集は既定50。
+
+WeChatの連絡先・会話一覧が遅い場合は[長い一覧](references/wechat.ja.md)、Weiboの「消息 → 动态」は[動態一覧](references/weibo.ja.md)を必要に応じて読む。他のアプリの遅いツリー、出力上限、可視文字欠落は[アプリ別の快照](references/app-snapshots.ja.md)で深度・出力予算・独自描画を区別する。新しいアプリのガイドには必要時の入口を追加し、単一画面の設定を全体の既定にしない。
 
 独自描画、遮蔽、ラベル欠落など画像の判断が必要なときにスクリーンショットを取る。同じ結果の画像は読みやすいサイズに縮小される。画像ピクセルに`image.pixel_to_point`の`[x, y]`を掛けてiPhoneポイントに変換し、元の解像度やMacの画面座標を使わない。screenshotはXMLを省略し、bothは両方を返す。画像取得で共有パネルが出たら現在の状態を処理し、同じ操作を繰り返さない。
 
@@ -65,6 +71,8 @@ for (const block of result.content ?? []) {
 
 ## アプリと通常の操作
 
+iPhoneで現在の画面を送信・アップロード・利用する場合は、`pua_screenshot()`でiOSのシステムスクリーンショットを写真に保存し、「写真」アプリまたは対象アプリの写真選択画面から使って最終結果を確認する。`pua_observe(mode="screenshot")`はモデルの観察用で、iPhoneの写真には保存しない。この用途をMacの画像取得・クリップボード・Web経由の転送に置き換えない。
+
 iPhoneの画像、動画、文書などをMacで読み取り・処理・納品する必要がある場合は、[AirDropでMacへファイルを送る](references/airdrop.ja.md)を参照する。送信後はダウンロードフォルダーで受け取ったファイルを確認する。
 
 確認済みのbundle IDなら直接起動する。オフラインのアプリ検索は`pua_apps(source="catalog", query=...)`または[アプリ一覧](references/apps.ja.md)。未知・同名のアプリは`source="auto"`で実機候補を探し、それでもなければAppleを検索する。IDを連続して推測しない。招商銀行の本体は`com.cmbchina.MPBBank`。ストア情報はインストールの証拠ではなく、`installed_verified=true`を確認する。起動後の必要な観察で実際の前面も読み、追加の起動確認を既定で挟まない。
@@ -82,7 +90,7 @@ iPhoneの画像、動画、文書などをMacで読み取り・処理・納品�
 
 `pua_type_text(selector, text)`に必要な文章を一度に渡す。短いテスト文章やASCIIを先に入れず、自分で分割しない。selectorの失敗後は座標で入力欄をタップし、selectorなしで入力する。既定は`replace=true, allow_newlines=false, submit=false, verify=false, observe="none"`。通常の検索・絞り込みは次へ進み、未知のページなら同じ呼び出しで観察を返す。下書きを保持する場合は現在の内容に応じて置換か追記を選ぶ。重要な最終文章には`verify=true`を使える。パスワード、ロック解除コード、認証コードは本人が入力する。
 
-長文はツールが分割する。`input_complete=false`なら返された`continue_token`だけで再度呼び、文章や他の引数を渡さない。入力完了までタップ、スワイプ、移動をしない。元のverify／submit／expect／observeは全入力後に実行される。`input_continuation_expired`では何も入力されないため、欄の実際の文字を読んで`replace=false`で不足部分だけを補う。途中のエラーの`characters_confirmed`も読み戻し、全文を再入力しない。
+長文はツールが分割する。`input_complete=false`なら返された`continue_token`だけで再度呼び、文章や他の引数を渡さない。入力完了までタップ、スワイプ、移動をしない。元のverify／submit／expect／observeは全入力後に実行される。継続前に元のアプリ、session、入力欄の焦点を再確認し、文脈が変わった場合や読み取れない場合はtokenが失効する。自動で元の画面に戻したり再入力したりしない。`input_continuation_expired`では何も入力されないため、元の入力先を特定して実際の文字を読み、`replace=false`で不足部分だけを補う。別アプリ・別入力欄へ補わない。途中のエラーの`characters_confirmed`も読み戻し、全文を再入力しない。
 
 チャット欄はReturnで送信する場合がある。適切な複数行TextViewと確認できた場合だけ`allow_newlines=true`。指定された書式を黙って1行に変えない。改行の許可は送信の許可ではない。送信が許可されている場合は宛先と完全な下書きを確認して1回送信し、最終内容と送信回数を確認する。`submit=true`だけでは成功を証明しない。未送信が明確な場合だけ補い、timeoutや普通の`verified=false`を理由に再送しない。
 

@@ -2,7 +2,7 @@
 
 まず提供されたツールを使い、通常操作は次の必要な観察で進捗も確認する。バインド欠落、ホストの転送エラー、確認済みのラッパー問題はPUA自体の不具合とは限らない。同じ許可済み操作をプラグインのコード入口から続けられる。同じ設定、session、操作ロック、エラー処理を保ち、毎回の追加検証を挟まない。
 
-モデル向け17ツールの、このターンで実際に使えるバインドをALL_TOOLSやツール検索で確認する。tools/list、文書、以前のチャットだけでは判断しない。install.shは同じ名前空間の標準MCPも登録する。導入後にチャットを再接続し、それでも必要なツールが使えない場合だけコード入口を使う。
+モデル向け18ツールの、このターンで実際に使えるバインドをALL_TOOLSやツール検索で確認する。tools/list、文書、以前のチャットだけでは判断しない。install.shは同じ名前空間の標準MCPも登録する。導入後にチャットを再接続し、それでも必要なツールが使えない場合だけコード入口を使う。
 
 ## エラーを区別する
 
@@ -13,8 +13,11 @@
 - input_continuation_expired：今回の入力はない。実際の文字を読み、replace=falseで不足だけ補う。
 - occluded_target／offscreen_target：対象タップは未実行。画像で見えるならtap_point、覆われていれば先に遮蔽処理、画面外ならスワイプ。独自パネルはAlert／Sheetがない場合がある。
 - postcondition_failed：操作は受理されたが結果条件が未達。現在の状態から残りを判断し、自動再実行しない。
-- action_executed=true、action_complete=false、uncertain、操作後timeout：部分的に有効かもしれない。入力、送信、削除は実際の欄・記録を読み、コード入口に変えて盲目的に繰り返さない。
-- 純照会の一時失敗：上限付きで1回再読できる。POSTの照会を変更操作と誤認しない。
+- action_executed=true、action_complete=false、action_uncertain、uncertain、操作後timeout：部分的に有効かもしれない。transport_errorとrecoveryでtimeout／接続失敗／その他を区別し、待機または接続確認後に観察する。入力、送信、削除は実際の欄・記録を読み、コード入口に変えて盲目的に繰り返さない。
+- pua_timeout：切断の証拠ではない。retry_after_seconds（現在2秒）だけホスト側で待ち、画像を1回取得する。なおtimeoutならもう1回だけ遅延観察し、以後setup statusで診断する。READY失敗なら同じ引数でREADYを遅延再試行する。pua_wait、直後のツリー再読、操作再実行、自動start／recoverを使わない。
+- pua_unreachable：HTTP接続の拒否、reset、pipe切断、EOFなど。setup statusで活動ジョブを再利用するか、サービス停止を確認し設定済み・活動ジョブなし・起動許可ありの場合だけstartを1回行う。物理USB切断の証拠ではない。
+- pua_transport_error：その他の通信・プロトコル異常。setup statusやログの具体的な診断に従い、自動再起動・再実行しない。
+- 純照会の失敗は端末操作の実行を証明しない。POSTの照会を変更操作と誤認せず、timeoutは上記の遅延復旧に従う。
 - local.pid.0、pua_foreground_unavailable、XCTest Code 41：READYで接続復旧。selector変更やボタン連打では対処しない。ロック・署名・信頼はsetup、アプリ認証は引き継ぎガイド。
 
 functions.execではtext(block.text)とimage(block)で内容を転送し、base64入り結果をtext(result)にしない。画像転送不能ならview_imageでimage.path／error.observation.image.pathを開く。座標はpixel_to_pointで変換する。

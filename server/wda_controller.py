@@ -161,10 +161,11 @@ class PhoneController:
         self._deadline=None
         self.pending_input=None
         self.last_target=None
+        self.snapshot_restore=None
         self.typing_frequency=TYPING_FREQUENCY
         self.typing_piece=TYPING_PIECE
         self.call_budget=CALL_BUDGET
-        # Seconds WDA may wait for animations before a post-action tree read; 0 reads at once.
+        # Bounded host-side transition delay; never enable XCTest's idle wait.
         self.settle_seconds=0
 
     def external_action(self):
@@ -286,17 +287,50 @@ class PhoneController:
             self.snapshots.popitem(last=False)
         return ident
 
-    def observe(self,mode="tree",include_invisible=False,max_nodes=DEFAULT_MAX_NODES,expensive_visibility=False):
+    def bounded_tree(self,include_invisible,expensive_visibility,limits):
+        saved=self.client.session("GET","/appium/settings")
+        if not isinstance(saved,dict) or any(not isinstance(saved.get(key),int) or isinstance(saved.get(key),bool) or saved[key]<1 for key in limits):
+            fail("invalid_response","PUA does not expose the requested native snapshot settings.",action_executed=False)
+        restore={key:saved[key] for key in limits}
+        if self.snapshot_restore:self.snapshot_restore(restore)
+        operation="snapshot_settings_apply"
+        try:
+            self.client.session("POST","/appium/settings",{"settings":limits})
+            operation="snapshot_read"
+            result=self.tree(include_invisible,expensive_visibility)
+            operation="snapshot_settings_restore"
+            self.client.session("POST","/appium/settings",{"settings":restore})
+        except BaseException as error:
+            # The native request may still be queued. Do not add another deadline
+            # of synchronous cleanup to the failing read; restore on the next call.
+            self.client.reapply_settings(restore)
+            if isinstance(error,WDAError) and operation!="snapshot_read":
+                error.details.update(action_executed=False,operation=operation)
+            raise
+        if self.snapshot_restore:self.snapshot_restore({})
+        return result
+
+    def observe(self,mode="tree",include_invisible=False,max_nodes=DEFAULT_MAX_NODES,expensive_visibility=False,snapshot_max_depth=None,snapshot_max_children=None):
         if mode not in ("tree","screenshot","both"):
             fail("invalid_argument","mode must be tree, screenshot or both.")
         integer(max_nodes,"max_nodes",1,500)
+        limits={}
+        for value,key,maximum in ((snapshot_max_depth,"snapshotMaxDepth",100),(snapshot_max_children,"snapshotMaxChildren",500)):
+            if value is not None:limits[key]=integer(value,key,1,maximum)
+        if limits and mode=="screenshot":
+            fail("invalid_argument","Snapshot limits require tree or both mode.",action_executed=False)
         if mode=="screenshot":
             app=self.active_app()
             nodes,viewport=[],self.viewport(VIEWPORT_TTL)
         else:
-            nodes,viewport=self.tree(include_invisible,expensive_visibility)
+            nodes,viewport=(self.bounded_tree(include_invisible,expensive_visibility,limits) if limits
+                            else self.tree(include_invisible,expensive_visibility))
             app=self._source_app or self.active_app()
-        return self.observation_from_state(nodes,viewport,app,mode,max_nodes,expensive_visibility)
+        result=self.observation_from_state(nodes,viewport,app,mode,max_nodes,expensive_visibility)
+        if limits:
+            result.update(snapshot_limits=limits,tree_complete=False,truncated=True,total_nodes_scope="bounded_snapshot")
+            result.setdefault("warnings",[]).append("Native depth/child limits apply before snapshot creation, not by visible area. Controls or visible rows may be omitted; missing nodes do not prove absence or list completeness. Inspect a screenshot.")
+        return result
 
     def observation_from_state(self,nodes,viewport,app,mode,max_nodes=DEFAULT_MAX_NODES,expensive_visibility=False):
         result={"observation_id":self.remember(nodes,viewport,app,has_tree=mode!="screenshot"),
@@ -520,24 +554,11 @@ class PhoneController:
                 fail("postcondition_failed","Expected target did not appear within the wait budget.",polls=attempts)
             time.sleep(min(0.25,max(0,deadline-time.monotonic())))
 
-    def cool_off(self,seconds):
-        try:
-            self.client.session("POST","/appium/settings",{"settings":{"animationCoolOffTimeout":seconds}})
-            return True
-        except WDAError:
-            # The read continues without the wait; the next command sends the fast settings again.
-            self.client.reapply_settings()
-            return False
-
     def observe_after(self,mode,max_nodes=DEFAULT_MAX_NODES):
-        """Post-action observation. A tree read may let PUA wait for the transition to end first."""
-        if self.settle_seconds>0 and mode=="screenshot":
-            # A screenshot has no such wait in WDA; give the transition a moment instead.
+        """Allow a short transition without entering XCTest's unbounded idle path."""
+        if self.settle_seconds>0 and mode in ("tree","both","screenshot"):
             time.sleep(min(self.settle_seconds,0.5))
-        if self.settle_seconds<=0 or mode not in ("tree","both") or not self.cool_off(self.settle_seconds):
-            return self.observe(mode,max_nodes=max_nodes)
-        try:return self.observe(mode,max_nodes=max_nodes)
-        finally:self.cool_off(0)
+        return self.observe(mode,max_nodes=max_nodes)
 
     def after(self,expect=None,observe="none",max_nodes=DEFAULT_MAX_NODES):
         result={"action_executed":True,"action_complete":True,"verified":False,"verification_deferred":True}
@@ -594,6 +615,18 @@ class PhoneController:
             time.sleep(min(.1,max(0,deadline-time.monotonic())))
         result=self.after(expect,observe)
         result.update(verified=True,verification_deferred=False,foreground_verified=True,verification_scope="Requested app is foreground; user task completion is separate.")
+        return result
+
+    @action_result
+    def screenshot(self):
+        if self.screen is not None and self.screen.paused():
+            fail("preview_paused","The preview is paused for authentication; no system screenshot was requested.",action_executed=False)
+        # Consumer-page Snapshot event: iOS captures and saves on the device.
+        # GET /screenshot only returns pixels to the host and does not save them.
+        self.post("/wda/performIoHidEvent",{"page":0x0C,"usage":0x65,"duration":0.005})
+        result=self.after()
+        result.update(screenshot_requested=True,destination="iPhone Photos",
+                      next_step="Find the new screenshot in iPhone Photos or the app's photo picker and use it there. Check the saved image before reporting success; do not repeat an uncertain capture.")
         return result
 
     @action_result
@@ -694,6 +727,13 @@ class PhoneController:
                 raise
             plan["focused"]=True;plan["pieces"].pop(0);plan["typed"]+=len(piece);sent+=1
         if plan["pieces"]:
+            if "app" not in plan:
+                try:plan.update(app=self.active_app(),session_id=getattr(self.client,"session_id",None))
+                except WDAError as error:
+                    self.pending_input=None
+                    error.details.update(characters_confirmed=plan["typed"],characters_total=plan["total"],
+                                         recovery={"replay_action":False,"next_step":"Locate the original intended field, read its actual text, and enter only the missing remainder with replace=false."})
+                    raise
             plan.update(token=uuid.uuid4().hex[:12],mark=self.accepted_actions,created=time.monotonic())
             self.pending_input=plan
             return {"action_executed":True,"action_complete":False,"input_complete":False,"verified":False,"verification_deferred":True,
@@ -717,10 +757,28 @@ class PhoneController:
 
     def continue_input(self,token):
         plan=self.pending_input
+        # A rejected or unreadable continuation must never remain reusable.
+        self.pending_input=None
+        def expired(reason,cause=None):
+            details={"action_executed":False,"reason":reason,
+                     "recovery":{"replay_action":False,"next_step":"Locate the original intended field and read its actual text, then type only the missing remainder with replace=false. Never resume into another app or field."}}
+            if cause:details["cause"]={"code":cause.code}
+            fail("input_continuation_expired","This continuation no longer has its original app, session and focused field, or it expired. Nothing was typed now.",**details)
         if not plan or plan["token"]!=token or self.accepted_actions!=plan["mark"] or time.monotonic()-plan["created"]>INPUT_TTL:
-            self.pending_input=None
-            fail("input_continuation_expired","This continuation is no longer usable: it was already finished, it expired, or another phone action ran since. Nothing was typed now.",action_executed=False,
-                 recovery={"replay_action":False,"next_step":"Read the field's actual text, then type only the missing remainder with replace=false."})
+            expired("token_or_action_changed")
+        if getattr(self.client,"session_id",None)!=plan["session_id"]:
+            expired("session_changed")
+        # The operation lock serializes tools, but another Runtime (or the user)
+        # can change focus between calls without changing this instance's counter.
+        try:
+            app=self.active_app()
+            path,_=self.focused_field()
+        except WDAError as error:
+            expired("context_unavailable",error)
+        if getattr(self.client,"session_id",None)!=plan["session_id"]:
+            expired("session_changed")
+        if app!=plan["app"]:expired("app_changed")
+        if path!=plan["path"]:expired("focus_changed")
         return self.type_pieces(plan)
 
     def region(self,region,viewport):

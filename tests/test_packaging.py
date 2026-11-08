@@ -31,6 +31,7 @@ class PackagingTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('local-only fixture')
         (cls.root / 'server/posthog.local.json').write_text('{"projectToken":"local-only-token"}')
+        (cls.root / 'server/ga4.local.json').write_text('{"apiSecret":"local-only-secret"}')
         subprocess.run([sys.executable, str(cls.root / 'scripts/package.py')], check=True, capture_output=True, text=True)
         cls.stage = cls.root / 'dist/iphone-use'
         cls.archive = next((cls.root / 'dist').glob('*-source.zip'))
@@ -42,8 +43,10 @@ class PackagingTests(unittest.TestCase):
         for contents in (entries, installed):
             self.assertFalse(any(p.startswith(('docs/', 'evals/', 'plugins/', 'ui/node_modules/')) for p in contents))
             self.assertNotIn('server/posthog.local.json', contents)
+            self.assertNotIn('server/ga4.local.json', contents)
             self.assertIn('server/analytics.py', contents)
             self.assertIn('server/posthog.json', contents)
+            self.assertIn('server/ga4.json', contents)
             self.assertIn('ANALYTICS.md', contents)
         self.assertIn('tests/test_packaging.py', entries)
         self.assertIn('.github/workflows/check.yml', entries)
@@ -93,7 +96,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(len(replies), 4)
         self.assertTrue(all('error' not in reply for reply in replies), str([r.get('error') for r in replies]))
         self.assertEqual(replies[0]['result']['serverInfo']['version'], version)
-        self.assertEqual(len(replies[1]['result']['tools']), 19)
+        self.assertEqual(len(replies[1]['result']['tools']), 20)
         uri = replies[2]['result']['resources'][0]['uri']
         read = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'resources/read', 'params': {'uri': uri}}) + '\n'
         process = subprocess.run([sys.executable, str(rebuilt / 'server/iphone_use.py')], input=read, capture_output=True, text=True, timeout=15, check=True)

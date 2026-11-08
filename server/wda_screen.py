@@ -132,6 +132,7 @@ class ScreenHub:
         self._lease_until = 0.0
         self._frame = None
         self._seq = 0
+        self._received_at = None
         self._stream_id = uuid.uuid4().hex
         self._state_cache = None
         # Marketing name of the phone for the header; never its own name or identifiers.
@@ -249,8 +250,10 @@ class ScreenHub:
             return {"server_time": self._now(), "frame": wire_frame,
                     "stream_id": self._stream_id, "device": self.device,
                     "frame_available": self._frame is not None and not state["paused"],
+                    "frame_age_ms": max(0, int((time.monotonic()-self._received_at)*1000)) if self._received_at is not None else None,
                     "viewport": state["viewport"],
                     "busy": bool(state["actors"] or state["finished_at"]) and not state["paused"],
+                    "input_busy": bool(state["actors"]) and not state["paused"],
                     "paused": state["paused"], "pause_reason": state["pause_reason"],
                     "events": [event for event in state["events"] if event["id"] > last_event_id]
                     if not state["paused"] else []}
@@ -398,6 +401,7 @@ class ScreenHub:
             # A close/pause racing the read must not repopulate cleared pixels.
             if stop.is_set():
                 return
+            self._received_at = time.monotonic()
             if self._frame and self._frame.get("_jpeg") == raw:
                 return
             self._seq += 1

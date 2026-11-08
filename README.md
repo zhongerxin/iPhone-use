@@ -4,13 +4,24 @@
 
 ![iPhone Use 在 Codex 中操作真实 iPhone 并实时展示手机屏幕](assets/iphone-use-demo.png)
 
-让 Codex 通过 USB 操作你的真实 iPhone。用自然语言描述任务，Codex 就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。
+让 Codex、WorkBuddy 或豆包工作通过 USB 操作你的真实 iPhone。用自然语言描述任务，助手就能打开 App、读取页面、点击、滚动、输入文字、整理列表，并在侧边栏展示手机屏幕。
 
 iPhone Use 使用 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA）与 iPhone 通信，包含本地 MCP 服务、安装与使用技能，以及实时屏幕 widget。它优先复用现有连接与构建；控件定位失败时，指导模型查看截图并尝试坐标点击。
 
-插件默认向独立的 PostHog 项目发送匿名使用统计，包括启动、工具调用、连接状态、耗时和错误类别。使用随机安装标识，不上传手机画面、输入内容或设备标识。设置 `IPHONE_USE_ANALYTICS=0` 或 `DO_NOT_TRACK=1` 并重启 MCP 服务可关闭。详见 [埋点与分析说明](ANALYTICS.md)。
+插件默认向独立的 PostHog 项目及 GA4 属性发送匿名使用统计，包括实际使用开始、工具调用、连接状态、耗时、错误类别，以及显式启动的 App 标识和公开目录名称（含 batch 中已完成的启动）。使用随机安装标识，不上传手机画面、输入内容、设备标识或已安装 App 清单。设置 `IPHONE_USE_ANALYTICS=0` 或 `DO_NOT_TRACK=1` 并重启 MCP 服务可关闭。详见 [埋点与分析说明](ANALYTICS.md)。
 
-**使用前，需要先在你自己的 iPhone 上安装、签名并启动 WDA Runner。** WDA 是运行在手机上的执行服务；下面的提示词和 setup 流程可以让 Codex 协助完成首次安装，已有健康的 WDA 可直接复用。
+**使用前，需要先在你自己的 iPhone 上安装、签名并启动 WDA Runner。** WDA 是运行在手机上的执行服务；下面的提示词和 setup 流程可以让所用宿主的助手协助完成首次安装，已有健康的 WDA 可直接复用。
+
+## 最近更新
+
+2026-10-09 至 2026-10-13，完整记录见 [更新记录](CHANGELOG.md)。
+
+- **预览直接操作**：支持点击画面、鼠标拖动和触控板双指滚动。
+- **微信点击优化**：已知导航目标直接看图点击，通讯录和会话列表按需轻量读取。
+- **AirDrop 文件传输**：使用技能新增传输指引，将手机图片、视频和文档传回 Mac。
+- **页面读取优化**：精简控件树，默认最多返回 200 个节点，支持按需限制快照。
+- **连接恢复改进**：完善超时与断线指引，自动恢复临时快照设置。
+- **长文本续传保护**：续传绑定原输入框，切换 App 或焦点后停止，避免误写。
 
 ## 用一段提示词让 Codex 安装
 
@@ -38,11 +49,64 @@ https://github.com/zhongerxin/iPhone-use
 
 仓库目前为私有，需要有 GitHub 访问权限，或者使用已取得的源代码包。
 
+## 在 WorkBuddy 和豆包工作中安装
+
+两者都支持通过 USB 操作真实 iPhone，并在侧边栏显示实时画面；共用本机的设备配置、WDA 构建和操作锁，已配置过的手机优先复用。依赖仍是 macOS、完整 Xcode、Python、Node.js / npm 和 USB iPhone，安装这两个适配版无需 Codex CLI。适配版默认关闭匿名使用统计。
+
+| 宿主 | 在源码目录运行 | 安装后的接入 |
+| --- | --- | --- |
+| [WorkBuddy](https://github.com/zhongerxin/iPhone-use/blob/main/workbuddy/README.md) | `python3 workbuddy/install.py` | 在「连接器管理」信任 `iphone_use`，新开会话 |
+| [豆包工作](https://github.com/zhongerxin/iPhone-use/blob/main/doubao/README.md) | `python3 doubao/install.py` | 按安装器输出新建 STDIO 连接器，上传两个技能，新开「本地电脑」任务 |
+
+将对应提示词发给本机的 WorkBuddy 或豆包工作。助手可执行本地安装；宿主界面的接入步骤若无法自动操作，会说明需要你完成的具体步骤。首次签名仍使用你自己的 Apple 账号和开发团队。
+
+### 发给 WorkBuddy 的提示词
+
+```text
+请在这台 Mac 上安装 iPhone Use，让 WorkBuddy 通过 USB 操作我的真实 iPhone：
+https://github.com/zhongerxin/iPhone-use
+
+先读取 README.md、workbuddy/README.md 和安装脚本，检查 Python、Node.js、npm、
+完整 Xcode 和 USB iPhone。克隆或复用本地源码，保留已有改动，
+在源码目录运行 python3 workbuddy/install.py；不要运行 Codex 安装脚本。
+在 WorkBuddy「连接器管理」里信任并启用 iphone_use，然后新开会话加载工具和技能。
+如果这些界面步骤需要我操作，给出具体位置，等我完成后继续。
+
+工具可用后读取 iphone-use-setup，先查询 setup status，复用已有配置、健康 WDA
+或正在运行的启动任务；首次配置使用我自己的设备和 Apple 开发团队完成签名与启动。
+确认 pua_ready 返回 ready=true 后调用一次 pua_screen()，在侧边栏显示实时手机画面，
+再在 iPhone 计算器中验证 12×34=408。Apple 登录、信任、开发者模式或解锁
+需要我接管时，说明具体步骤并等我完成；不要照搬作者的设备标识或签名信息。
+```
+
+### 发给豆包工作的提示词
+
+```text
+请在这台 Mac 上安装 iPhone Use，让豆包工作通过 USB 操作我的真实 iPhone：
+https://github.com/zhongerxin/iPhone-use
+
+在「本地电脑」任务中先读取 README.md、doubao/README.md 和安装脚本，
+检查 Python、Node.js、npm、完整 Xcode 和 USB iPhone。克隆或复用本地源码，
+保留已有改动，在源码目录运行 python3 doubao/install.py；不要运行 Codex 安装脚本。
+按安装器输出，在「插件 · 技能 · 伙伴」中新建名为 iphone_use 的 STDIO 连接器，
+命令和参数使用输出的绝对路径，并分别上传安装目录下的 iphone-use、iphone-use-setup
+两个技能文件夹。启用连接器和技能，再新开「本地电脑」任务；已有连接器更新后关闭再打开。
+如果这些界面步骤需要我操作，给出具体位置和路径，等我完成后继续。
+
+工具可用后读取 iphone-use-setup，先查询 setup status，复用已有配置、健康 WDA
+或正在运行的启动任务；首次配置使用我自己的设备和 Apple 开发团队完成签名与启动。
+确认 pua_ready 返回 ready=true 后调用一次 pua_screen()，在右侧 MCP App 显示实时手机画面，
+再在 iPhone 计算器中验证 12×34=408。Apple 登录、信任、开发者模式或解锁
+需要我接管时，说明具体步骤并等我完成；不要照搬作者的设备标识或签名信息。
+```
+
+如果工具没有加载，先确认连接器已启用，再新开会话 / 本地电脑任务。两个宿主同时使用同一部手机时，按共享操作锁的提示等待，避免同时操作。详细安装、更新和排查步骤见上表链接。
+
 ## 安装依赖
 
 | 依赖 | 用途 |
 | --- | --- |
-| macOS 与 Codex 桌面端 / CLI | 安装本地插件、运行 MCP 服务与屏幕侧边栏 |
+| macOS 与 Codex、WorkBuddy 或豆包工作 | 运行本地 MCP 服务与屏幕侧边栏；Codex 版安装另需 Codex CLI |
 | 完整 Xcode，已完成首次启动配置 | 编译、签名、部署和运行 WDA；仅 Command Line Tools 不够 |
 | 可在 Xcode 中使用的 Apple 账号和开发团队 | 签名手机端 WDA Runner |
 | USB 连接的真实 iPhone | 信任此 Mac，开启设备要求的开发者模式，安装与启动期间保持解锁 |
@@ -111,9 +175,9 @@ sh scripts/install.sh
 读取这个列表，分段滚动并去重，说明已经覆盖的范围和还未确认的部分。
 ```
 
-输入与提交分开，工具默认不提交文字。模型需要核对关键页面、接收人、数量和最终结果。密码、验证码、Face ID 等认证交给用户完成，接管期间可以暂停预览。
+输入与提交分开，工具默认不提交文字。模型需要核对关键页面、接收人、数量和最终结果。密码、验证码、Face ID 等认证交给用户完成；等待解锁或认证接管时，widget 保留暂停前的画面，叠加黑色半透明遮罩、接管手势图标和「请在手机上接管操作」提示。恢复预览后自动移除遮罩。
 
-屏幕预览在同一聊天中复用已有 widget。底部提供刷新、主屏幕和截图按钮；无图像时保留黑色屏幕的 iPhone 外壳，屏幕内仅显示对应状态图标，顶部显示连接或暂停状态。预览供用户观看，模型定位仍以工具返回的实际图像或控件为依据。
+屏幕预览在同一聊天中复用已有 widget。支持直接点击实时画面、鼠标拖动和触控板双指滚动／翻页，底部提供刷新、主屏幕和截图按钮。外观按连接机型匹配：支持灵动岛的机型才显示灵动岛；其他已知圆角屏机型保留圆角和外壳；iPhone X 之前的机型、所有 iPhone SE 和未知机型仅显示无圆角、无外壳的矩形屏幕。无图像时屏幕内仅显示对应状态图标，顶部显示连接或暂停状态。预览供用户观看，模型定位仍以工具返回的实际图像或控件为依据。
 
 ## 技术亮点
 
@@ -129,12 +193,13 @@ sh scripts/install.sh
 
 ## 工具概览
 
-模型可用 17 个工具，另有 2 个仅供屏幕 widget 使用的工具。
+模型可用 18 个工具，另有 2 个仅供屏幕 widget 使用的工具。
 
 | 工具 | 用途 |
 | --- | --- |
 | `pua_doctor`、`pua_setup`、`pua_ready` | 环境诊断、设备配置、后台安装 / 启动与就绪检查 |
-| `pua_observe`、`pua_find` | 控件树、截图与目标查询 |
+| `pua_observe`、`pua_find` | 控件树、观察截图与目标查询 |
+| `pua_screenshot` | 触发 iOS 系统截屏并存入手机相册，供手机内发送、上传或使用 |
 | `pua_apps`、`pua_launch_app` | 查询 App 标识、读取安装证据和启动 App |
 | `pua_tap`、`pua_swipe`、`pua_press_button` | 点击、滑动、主屏幕等操作 |
 | `pua_type_text`、`pua_wait` | Unicode 输入与有界等待 |
