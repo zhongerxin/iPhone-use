@@ -3,8 +3,9 @@
 
 Run with the pymobiledevice3 venv created by scripts/tailscale_setup.sh.
 
-  run       Supervisor for launchd: forwards 127.0.0.1:<local_port> to the phone's WDA
-            and relaunches the WDA runner over the network whenever WDA is down.
+  serve     Started by the plugin's `pua_setup start` job in network mode (never on its own):
+            forwards 127.0.0.1:<local_port> to the phone's WDA, launches the runner over
+            the network if needed, and shuts WDA down after idle_minutes without requests.
   pair-usb  One-time, phone on USB: create the RemotePairing record without a prompt.
             iOS refuses new pairings over the network.
   probe     Open the developer tunnel over the network and list the installed runner.
@@ -17,11 +18,13 @@ so this uses RemotePairing plus pymobiledevice3's no-root userspace tunnel.
 """
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
 from pathlib import Path
 import sys
+import time
 import urllib.request
 
 SERVER = Path(__file__).resolve().parents[1] / "server"
@@ -32,7 +35,6 @@ from wda_setup import state_directory  # noqa: E402
 REMOTE_PAIRING_PORT = 49152
 CHECK_SECONDS = 15
 LAUNCH_GRACE_SECONDS = 120
-BACKOFF = (30, 60, 120, 300, 600)
 log = logging.getLogger("iphone-use-tailscale")
 
 
@@ -102,10 +104,22 @@ def wda_ready(cfg):
         return False
 
 
-async def forward(cfg):
-    async def pipe(reader, writer):
+class Forward:
+    """127.0.0.1:<local_port> -> phone WDA. Loopback only: WDA has no authentication."""
+
+    def __init__(self, cfg):
+        self.cfg, self.last_activity = cfg, time.monotonic()
+
+    async def start(self):
+        server = await asyncio.start_server(self._handle, "127.0.0.1", self.cfg["local_port"])
+        log.info("forwarding 127.0.0.1:%s -> %s:%s", self.cfg["local_port"], self.cfg["host"], self.cfg["wda_port"])
+        return server
+
+    async def _pipe(self, reader, writer, request_side):
         try:
             while data := await reader.read(65536):
+                if request_side:
+                    self.last_activity = time.monotonic()
                 writer.write(data)
                 await writer.drain()
         except (OSError, asyncio.IncompleteReadError):
@@ -113,60 +127,71 @@ async def forward(cfg):
         finally:
             writer.close()
 
-    async def handle(client_reader, client_writer):
+    async def _handle(self, client_reader, client_writer):
+        self.last_activity = time.monotonic()
         try:
             remote_reader, remote_writer = await asyncio.wait_for(
-                asyncio.open_connection(cfg["host"], cfg["wda_port"]), timeout=10)
+                asyncio.open_connection(self.cfg["host"], self.cfg["wda_port"]), timeout=10)
         except (OSError, asyncio.TimeoutError) as error:
             log.warning("forward connect failed: %s", error)
             client_writer.close()
             return
-        await asyncio.gather(pipe(client_reader, remote_writer), pipe(remote_reader, client_writer))
-
-    # Loopback only: WDA has no authentication.
-    server = await asyncio.start_server(handle, "127.0.0.1", cfg["local_port"])
-    log.info("forwarding 127.0.0.1:%s -> %s:%s", cfg["local_port"], cfg["host"], cfg["wda_port"])
-    return server
+        await asyncio.gather(self._pipe(client_reader, remote_writer, True),
+                             self._pipe(remote_reader, client_writer, False))
 
 
-async def supervise(cfg):
-    server = await forward(cfg)
-    task, started, failures, down, retry_at = None, 0.0, 0, 0, 0.0
-    loop = asyncio.get_running_loop()
-    async with server:
+def shutdown_wda(cfg):
+    with contextlib.suppress(Exception):
+        urllib.request.urlopen(f"http://{cfg['host']}:{cfg['wda_port']}/wda/shutdown", timeout=5).close()
+
+
+async def serve(cfg):
+    """Owned by the plugin's `pua_setup start` job: forward, launch WDA if needed, stop when idle.
+
+    Exit 0 after the idle timeout (WDA shut down); exit 1 when WDA cannot be launched or dies,
+    so the plugin's normal status/start/recover flow takes over.
+    """
+    forward = Forward(cfg)
+    idle = cfg["idle_minutes"] * 60
+    task = None
+    async with await forward.start():
+        if not await asyncio.to_thread(wda_ready, cfg):
+            task = asyncio.create_task(launch(cfg))
+            deadline = time.monotonic() + LAUNCH_GRACE_SECONDS
+            while not await asyncio.to_thread(wda_ready, cfg):
+                if task.done() or time.monotonic() > deadline:
+                    task.cancel()
+                    log.error("WDA did not become ready (phone locked, Wi-Fi off, or UI automation not approved?)")
+                    raise SystemExit(1)
+                await asyncio.sleep(2)
+        else:
+            log.info("WDA already running; forwarding only")
+        log.info("WDA ready; idle timeout %s min", cfg["idle_minutes"])
+        failures = 0
         while True:
-            ready = await asyncio.to_thread(wda_ready, cfg)
-            now = loop.time()
-            down = 0 if ready else down + 1
-            if ready:
-                failures = 0
-            if task and task.done():
-                error = None if task.cancelled() else task.exception()
-                log.info("runner session ended%s", f": {error!r}" if error else "")
-                task = None
-                if not ready:
-                    failures += 1
-                    retry_at = now + BACKOFF[min(failures - 1, len(BACKOFF) - 1)]
-            if task and not ready and now - started > LAUNCH_GRACE_SECONDS:
-                log.warning("WDA not ready %ss after launch (phone locked or UI automation prompt?); retrying later",
-                            LAUNCH_GRACE_SECONDS)
-                task.cancel()
-            if task is None and down >= 2 and now >= retry_at:
-                started = now
-                task = asyncio.create_task(launch(cfg))
             await asyncio.sleep(CHECK_SECONDS)
+            if idle and time.monotonic() - forward.last_activity > idle:
+                log.info("idle for %s min; shutting WDA down", cfg["idle_minutes"])
+                if task:
+                    task.cancel()
+                await asyncio.to_thread(shutdown_wda, cfg)
+                raise SystemExit(0)
+            failures = 0 if await asyncio.to_thread(wda_ready, cfg) else failures + 1
+            if failures >= 3:
+                log.error("WDA stopped responding")
+                raise SystemExit(1)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("run", "pair-usb", "probe", "launch"))
+    parser.add_argument("command", choices=("serve", "pair-usb", "probe", "launch"))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     for noisy in ("pymobiledevice3", "asyncio", "pytcp"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     os.umask(0o077)
     cfg = settings()
-    action = {"run": supervise, "pair-usb": pair_usb, "probe": probe, "launch": launch}[args.command]
+    action = {"serve": serve, "pair-usb": pair_usb, "probe": probe, "launch": launch}[args.command]
     asyncio.run(action(cfg))
 
 

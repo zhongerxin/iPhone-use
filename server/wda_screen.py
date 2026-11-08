@@ -48,7 +48,10 @@ def network_target(state_dir):
         return None
     if any(isinstance(v, bool) or not isinstance(v, int) or not 1024 <= v <= 65535 for v in ports.values()):
         return None
-    return {"host": host, **ports}
+    idle = network.get("idle_minutes", 30)  # 0 keeps WDA running until stopped
+    if isinstance(idle, bool) or not isinstance(idle, int) or not 0 <= idle <= 1440:
+        return None
+    return {"host": host, **ports, "idle_minutes": idle}
 
 
 def jpeg_dimensions(raw):

@@ -28,6 +28,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from wda_screen import network_target
+
 WDA_COMMIT = "d17782422d55ff1e5e0ceb74eb1fd509cc0c35b6"
 WDA_VERSION = "16.14.0"
 WDA_REPOSITORY = "https://github.com/appium/WebDriverAgent.git"
@@ -820,6 +822,26 @@ def _worker(state_dir, job_id, owner_token, base_url):
                     manager._stop_recovery_target(job)
                     job["recovery_phase"] = "starting"
                     _write_json(path, job)
+                network = network_target(manager.state_dir)
+                if network:
+                    # Private-network mode (network.json): one owned child forwards the
+                    # loopback port and launches the runner over RemotePairing.
+                    python = manager.state_dir / "runtime/pmd3/bin/python"
+                    if not python.is_file():
+                        raise RuntimeError("Network mode needs the pymobiledevice3 venv; run scripts/tailscale_setup.sh HOST.")
+                    print(f"Network mode: launching WDA over {network['host']}", flush=True)
+                    serve = launch([str(python), "-I", str(PLUGIN_ROOT / "scripts/tailscale_wda.py"), "serve"])
+                    while not stopping and serve.poll() is None:
+                        if action == "recover" and job.get("recovery_phase") == "starting" and manager._probe_status().get("ready"):
+                            job.update(recovery_phase="serving", service_started_at=_now())
+                            _write_json(path, job)
+                        time.sleep(1)
+                    if stopping:
+                        raise InterruptedError("Stopped by owner request.")
+                    if serve.returncode == 0:
+                        job.update(state="succeeded", completed_at=_now(), note="Network WDA stopped after idle timeout.")
+                        return
+                    raise RuntimeError("Network WDA service exited; inspect the log tail. Launching needs the phone unlocked with Wi-Fi on.")
                 forward = manager.state_dir / "runtime/forward"
                 forward.mkdir(exist_ok=True, mode=0o700)
                 for name in ("package.json", "package-lock.json", "forward.mjs"):
