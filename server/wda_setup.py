@@ -222,7 +222,8 @@ class SetupManager:
             probe = _run(["xcrun", "devicectl", "list", "devices", "--json-output", name, "--timeout", "8"], timeout=12)
             document = _read_json(name, {})
             devices = self.parse_devices(document)
-            if not probe["ok"] or not document:
+            # iOS <17 is not a CoreDevice: devicectl may succeed with only stale entries, so fall back on no devices.
+            if not probe["ok"] or not devices:
                 fallback = _run(["xcrun", "xcdevice", "list", "--timeout", "5"], timeout=9)
                 try:
                     devices = [{"udid": item["identifier"], "name": item.get("name"), "model": item.get("modelName"),
