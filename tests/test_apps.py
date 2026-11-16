@@ -1,5 +1,6 @@
 import json
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +25,10 @@ class AppTests(unittest.TestCase):
         self.setup = FakeSetup()
         self.setup.config = {}
         self.catalog = wda_apps.AppCatalog(Path(self.temp.name), self.setup)
+        # Keep tests independent of whether this machine has libimobiledevice installed.
+        which = patch.object(wda_apps.shutil, "which", return_value=None)
+        which.start()
+        self.addCleanup(which.stop)
 
     @staticmethod
     def apple():
@@ -169,6 +174,52 @@ class AppTests(unittest.TestCase):
         self.assertFalse(result["candidates"][0]["installation_checked"])
         self.assertFalse(result["candidates"][0]["installed_verified"])
         self.assertTrue(result["warnings"])
+
+    @staticmethod
+    def ideviceinstaller_xml():
+        return plistlib.dumps([
+            {"CFBundleIdentifier": "com.tencent.xin", "CFBundleDisplayName": "微信", "CFBundleName": "WeChat", "ApplicationType": "User"},
+            {"CFBundleIdentifier": "com.apple.Preferences", "CFBundleName": "设置", "ApplicationType": "System"},
+            {"CFBundleIdentifier": "com.apple.hidden.service", "CFBundleName": "Hidden", "ApplicationType": "Hidden"},
+            {"CFBundleIdentifier": "com.apple.MBHelperApp", "CFBundleName": "设置", "ApplicationType": "System", "SBAppTags": ["hidden"]},
+            "not-a-dict"])
+
+    def test_parse_ideviceinstaller_keeps_launchable_apps(self):
+        document = wda_apps.AppCatalog.parse_ideviceinstaller(self.ideviceinstaller_xml())
+        rows = wda_apps.AppCatalog.parse_installed(document)
+        self.assertEqual([(row["name"], row["bundle_id"]) for row in rows],
+                         [("微信", "com.tencent.xin"), ("设置", "com.apple.Preferences")])
+        self.assertIsNone(wda_apps.AppCatalog.parse_ideviceinstaller(b"not a plist"))
+        self.assertIsNone(wda_apps.AppCatalog.parse_ideviceinstaller(plistlib.dumps({"apps": []})))
+
+    def test_installed_falls_back_to_ideviceinstaller_when_devicectl_fails(self):
+        # iOS 16 and earlier are not CoreDevices, so devicectl cannot list their apps.
+        self.setup.config = {"udid": "0123456789abcdef0123456789abcdef01234567"}
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            self.assertNotIn("shell", kwargs)
+            if argv[:2] == ["xcrun", "devicectl"]:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unsupported")
+            self.assertEqual(argv, ["/test/ideviceinstaller", "-u", "0123456789abcdef0123456789abcdef01234567", "list", "--all", "--xml"])
+            return subprocess.CompletedProcess(argv, 0, stdout=self.ideviceinstaller_xml(), stderr=b"")
+        with patch.object(wda_apps.shutil, "which", return_value="/test/ideviceinstaller"), \
+             patch.object(wda_apps.subprocess, "run", side_effect=run):
+            result = self.catalog.lookup("微信", source="installed")
+            again = self.catalog.lookup("设置", source="installed")
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["warnings"])
+        self.assertEqual(result["candidates"][0]["bundle_id"], "com.tencent.xin")
+        self.assertTrue(result["candidates"][0]["installed_verified"])
+        self.assertEqual(again["candidates"][0]["bundle_id"], "com.apple.Preferences")
+        self.assertEqual(len(calls), 2)  # the second lookup is served from the private cache
+
+    def test_installed_failure_without_ideviceinstaller_explains_legacy_ios(self):
+        self.setup.config = {"udid": "0123456789abcdef0123456789abcdef01234567"}
+        with patch.object(wda_apps.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)):
+            result = self.catalog.lookup("微信", source="installed")
+        self.assertFalse(result["ok"])
+        self.assertIn("ideviceinstaller", result["warnings"][0])
 
     def test_apple_parsing_deduplicates_and_excludes_invalid_metadata(self):
         doc = self.apple()

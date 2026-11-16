@@ -11,6 +11,8 @@ import fcntl
 import hashlib
 import json
 import os
+import plistlib
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -148,6 +150,36 @@ class AppCatalog:
                          "origin": "installed", "installed_verified": True, "installation_checked": True})
         return rows
 
+    @staticmethod
+    def parse_ideviceinstaller(data):
+        """Map `ideviceinstaller list --all --xml` output to the devicectl-shaped document."""
+        try:
+            items = plistlib.loads(data)
+        except (plistlib.InvalidFileException, ValueError, TypeError):
+            return None
+        if not isinstance(items, list):
+            return None
+        apps = [{"bundleIdentifier": item.get("CFBundleIdentifier"),
+                 "name": item.get("CFBundleDisplayName") or item.get("CFBundleName") or item.get("CFBundleIdentifier")}
+                for item in items
+                # Hidden types and SBAppTags=hidden are services without a Home Screen icon.
+                if isinstance(item, dict) and item.get("ApplicationType") in {"User", "System"}
+                and "hidden" not in (item.get("SBAppTags") or [])]
+        return {"result": {"apps": apps}}
+
+    def _ideviceinstaller_document(self, udid):
+        # devicectl only knows CoreDevices (iOS 17+). libimobiledevice still lists
+        # apps on earlier iOS through lockdown when it is installed.
+        binary = shutil.which("ideviceinstaller")
+        if not binary:
+            return None
+        try:
+            result = subprocess.run([binary, "-u", udid, "list", "--all", "--xml"],
+                                    capture_output=True, timeout=15, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return self.parse_ideviceinstaller(result.stdout) if result.returncode == 0 else None
+
     def _catalog(self):
         document = _read(CATALOG_PATH, {})
         rows = []
@@ -184,7 +216,11 @@ class AppCatalog:
                                     text=True, capture_output=True, timeout=10, check=False)
             document = _read(name, {})
             if result.returncode != 0 or self._installed_apps(document) is None:
-                return [], False, "Could not list selected-device apps. Unlock/connect the iPhone, verify Xcode pairing and retry; catalog candidates are not installation proof."
+                document = self._ideviceinstaller_document(udid)
+            if document is None or self._installed_apps(document) is None:
+                return [], False, ("Could not list selected-device apps. Unlock/connect the iPhone, verify Xcode pairing and retry; "
+                                   "for iOS 16 or earlier install libimobiledevice's ideviceinstaller (brew install ideviceinstaller). "
+                                   "Catalog candidates are not installation proof.")
             rows = self.parse_installed(document)
             for row in rows:
                 row["verified_at"] = _now()

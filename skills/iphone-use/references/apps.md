@@ -9,7 +9,7 @@
 本例应返回 `com.cmbchina.MPBBank`。检查名称、发布者和候选来源后，把 bundle_id 传给 `pua_launch_app`。正常启动乐观继续；下一步需要未知页面信息时在该次 launch 设置 observe，顺带查看实际前台和目标页，不另加默认启动验收。招商银行主应用与掌上生活信用卡应用是两个应用。
 
 - `source=auto`：先读取已选设备的安装列表（本地缓存 300 秒），合并本地目录。精确名称/别名优先；精确匹配存在时不混入子串候选。无本地候选才调用 Apple。
-- `source=installed`：只查已选 iPhone，缺少选定设备或读取失败时返回可执行的诊断。英文品牌别名可用本地目录映射到安装列表的 bundle ID。
+- `source=installed`：只查已选 iPhone，缺少选定设备或读取失败时返回可执行的诊断。英文品牌别名可用本地目录映射到安装列表的 bundle ID。devicectl 只支持 iOS 17+；iOS 16 及以下在本机装有 `ideviceinstaller`（`brew install ideviceinstaller`）时自动改用它读取。
 - `source=catalog`：离线查本文件和 `apps.json` 中 36 个经过 Apple 查询核验的应用。完全不查询 iPhone 或网络。
 - `source=apple`：查询指定 App Store 国家/地区的 Apple 公共 API，默认 `country=cn`，可指定 `hk`、`us` 等。返回商店候选，不意味着安装在用户手机上。
 
@@ -43,6 +43,12 @@ Apple 商店搜索存在同名、地区和下架限制，企业内部、开发�
 
 ```sh
 xcrun devicectl device info apps --device "<已选设备 UDID>" --include-all-apps --json-output "<私有目录>/apps.json" --timeout 8
+```
+
+iOS 16 及以下改用：
+
+```sh
+ideviceinstaller -u "<已选设备 UDID>" list --all --xml > "<私有目录>/apps.plist"
 ```
 
 ## 已核验目录

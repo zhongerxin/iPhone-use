@@ -1,5 +1,9 @@
 # 更新记录
 
+## Unreleased
+
+- `pua_apps(source="installed" / "auto")` 支持 iOS 16 及以下设备：devicectl 读取失败时，若本机装有 `ideviceinstaller`，改用它读取安装列表（只保留主屏可见的 User / System 应用，排除 Hidden 类型和 `SBAppTags=hidden` 的系统组件）；都不可用时诊断里提示安装方式。
+
 ## 0.3.16 — 2026-10-22
 
 - 增加显式 App 启动埋点，同步发送到 PostHog 和 GA4，记录校验后的 bundle ID、公开目录名称、单次 / batch 来源和前台核验状态；batch 仅统计已成功返回的启动子步骤。
