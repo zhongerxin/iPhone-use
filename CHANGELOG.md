@@ -1,5 +1,9 @@
 # 更新记录
 
+## Unreleased
+
+- 修复 iOS 17 以下设备的 `discover`：devicectl 只返回失效的 CoreDevice 条目时，回退到 xcdevice 查询，iOS 15/16 真机可被识别。
+
 ## 0.3.16 — 2026-10-22
 
 - 增加显式 App 启动埋点，同步发送到 PostHog 和 GA4，记录校验后的 bundle ID、公开目录名称、单次 / batch 来源和前台核验状态；batch 仅统计已成功返回的启动子步骤。

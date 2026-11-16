@@ -30,6 +30,23 @@ class SetupTests(unittest.TestCase):
         return {"id": "a" * 32, "action": "start", "state": "running", "pid": pid,
                 "owner_token": token, "created_at": "2026-10-06T00:00:00Z", "config": {}}
 
+    def test_discover_falls_back_to_xcdevice_when_devicectl_lists_only_stale_entries(self):
+        # iOS <17 devices are not CoreDevices: devicectl can succeed with only an
+        # unavailable leftover entry, while xcdevice still sees the real phone.
+        stale = {"result": {"devices": [{"identifier": "11111111-2222-3333-4444-555555555555",
+                                         "connectionProperties": {}, "deviceProperties": {},
+                                         "hardwareProperties": {"deviceType": "iPhone"}}]}}
+        xcdevice = ('[{"identifier": "0123456789abcdef0123456789abcdef01234567", "name": "Phone",'
+                    ' "modelName": "iPhone 6s", "operatingSystemVersion": "15.8.6 (19H402)", "available": true,'
+                    ' "simulator": false, "platform": "com.apple.platform.iphoneos"}]')
+        runs = [{"ok": True, "stdout": "", "stderr": ""}, {"ok": True, "stdout": xcdevice, "stderr": ""}]
+        with patch.object(wda_setup, "_run", side_effect=runs) as run, \
+             patch.object(wda_setup, "_read_json", return_value=stale):
+            result = self.manager.discover()
+        self.assertEqual(run.call_args_list[1].args[0][:3], ["xcrun", "xcdevice", "list"])
+        self.assertEqual([d["udid"] for d in result["devices"]], ["0123456789abcdef0123456789abcdef01234567"])
+        self.assertEqual(result["devices"][0]["ios_version"], "15.8.6 (19H402)")
+
     def test_start_waits_for_service_without_creating_another_job(self):
         job = {"id": "a" * 32, "action": "start", "state": "running"}
         queued = {"ok": True, "job_id": job["id"], "job": job}
