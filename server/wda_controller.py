@@ -147,6 +147,8 @@ def contains(outer,inner,slack=1):
             and inner["y"]+inner["height"]<=outer["y"]+outer["height"]+slack)
 
 
+MULTI_TAP_INTERVAL_MS=120
+
 class PhoneController:
     def __init__(self, client, state_dir):
         self.client, self.state_dir = client, Path(state_dir)
@@ -568,28 +570,48 @@ class PhoneController:
             result["observation"]=self.observe_after(observe,max_nodes=max_nodes)
         return result
 
+    def multi_tap(self,x,y,count,interval_ms=MULTI_TAP_INTERVAL_MS):
+        """Several taps at one point in a single W3C actions request.
+
+        Separate tap requests each wait for XCTest synchronization (~0.6-1s apiece), so
+        apps that open a hidden page on N taps within a short window never see them.
+        """
+        steps=[{"type":"pointerMove","duration":0,"origin":"viewport","x":x,"y":y}]
+        for i in range(count):
+            steps+=[{"type":"pointerDown","button":0},{"type":"pause","duration":40},{"type":"pointerUp","button":0}]
+            if i<count-1:steps.append({"type":"pause","duration":interval_ms})
+        self.screen_event("tap",point={"x":x,"y":y})
+        self.post("/actions",{"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":steps}]})
+
     @action_result
-    def tap(self,selector=None,x=None,y=None,observation_id=None,expect=None,observe="none"):
+    def tap(self,selector=None,x=None,y=None,observation_id=None,expect=None,observe="none",count=1):
         if observe not in ("none","tree","screenshot","both"):
             fail("invalid_argument","Invalid observation mode.")
+        if isinstance(count,bool) or not isinstance(count,int) or not 1<=count<=10:
+            fail("invalid_argument","count must be an integer from 1 to 10.")
         if expect:predicate(expect)
         if selector is not None:
             if x is not None or y is not None:
                 fail("invalid_argument","Choose selector or coordinates.")
-            try:path=self.target(selector)
+            try:element=self.resolve(selector)
             except WDAError as error:
                 self.switch_to_coordinates(error);raise
             chosen=self.last_target
-            self.post(path+"/click",{})
+            if count>1:
+                rect=self.element_rect(element)
+                self.multi_tap(rect["x"]+rect["width"]/2,rect["y"]+rect["height"]/2,count)
+            else:self.post(element["path"]+"/click",{})
         else:
             finite(x,"x");finite(y,"y")
             viewport=self.guard(observation_id)
             if x>=viewport["width"] or y>=viewport["height"]:
                 fail("invalid_argument","Coordinates are outside the iPhone viewport.")
             chosen=None
-            self.post("/wda/tap",{"x":x,"y":y})
+            if count>1:self.multi_tap(x,y,count)
+            else:self.post("/wda/tap",{"x":x,"y":y})
         result=self.after(expect,observe)
         if chosen:result["target"]=chosen
+        if count>1:result["taps"]=count
         return result
 
     @action_result
