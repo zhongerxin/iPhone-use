@@ -205,6 +205,35 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(result["verification_deferred"])
         self.assertEqual(self.client.actions()[-1][1], "/wda/tap")
 
+    def test_tap_count_sends_one_actions_request(self):
+        result = self.phone.tap(x=40, y=80, count=5)
+        self.assertEqual(result["taps"], 5)
+        posts = [(path, payload) for method, path, payload in self.client.calls if method == "POST" and path != "/session"]
+        self.assertEqual([path for path, _ in posts], ["/actions"])
+        steps = posts[0][1]["actions"][0]["actions"]
+        self.assertEqual(steps[0], {"type": "pointerMove", "duration": 0, "origin": "viewport", "x": 40, "y": 80})
+        self.assertEqual(sum(step["type"] == "pointerDown" for step in steps), 5)
+        self.assertEqual(sum(step["type"] == "pointerUp" for step in steps), 5)
+        self.assertEqual([step["duration"] for step in steps if step["type"] == "pause" and step["duration"] == 120], [120] * 4)
+
+    def test_tap_count_with_selector_taps_target_center(self):
+        self.phone.tap(selector={"label": "Target"}, count=2)
+        posts = [payload for method, path, payload in self.client.calls if method == "POST" and path == "/actions"]
+        self.assertEqual(len(posts), 1)
+        move = posts[0]["actions"][0]["actions"][0]
+        self.assertEqual((move["x"], move["y"]), (195, 222))
+        self.assertFalse(any(path.endswith("/click") for _, path, _ in self.client.calls))
+
+    def test_single_tap_keeps_wda_tap(self):
+        self.phone.tap(x=40, y=80, count=1)
+        self.assertEqual(self.client.actions()[-1][1], "/wda/tap")
+
+    def test_tap_count_rejects_out_of_range(self):
+        for kwargs in ({"count": 0}, {"count": 11}, {"count": True}):
+            with self.subTest(kwargs=kwargs):
+                self.assert_code("invalid_argument", lambda: self.phone.tap(x=40, y=80, **kwargs))
+        self.assertFalse(any(path in ("/actions", "/wda/tap") for _, path, _ in self.client.calls))
+
     def test_changed_app_or_orientation_rejects_supplied_coordinate_context(self):
         for change in ("app", "orientation"):
             with self.subTest(change=change):
