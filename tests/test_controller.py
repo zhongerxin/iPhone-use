@@ -800,7 +800,7 @@ class ControllerTests(unittest.TestCase):
         self.client.calls.clear()
         self.phone.type_text({"label": "Target"}, "text")
         self.assertEqual([path for _, path, _ in self.client.calls],
-                         ["/elements", "/element/target/attribute/hittable", "/element/target/click",
+                         ["/elements", "/element/target/attribute/hittable",
                           "/element/target/clear", "/element/target/value"])
 
     def test_inline_type_still_refuses_secure_and_noneditable_fields(self):

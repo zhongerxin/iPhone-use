@@ -684,8 +684,11 @@ class PhoneController:
             fail("newline_unsafe","Line breaks are allowed only for a verified TextView.")
         before=(self.client.session("GET",path+"/attribute/value") or "") if verify and not replace else ""
         self.pending_input=None
+        # No separate click: WDA's clear and value taps the element itself when it lacks keyboard focus
+        # (fb_prepareForTextInput), so a click first cost one more synchronized request (~0.6 s) for nothing.
         # Without a selector the field was focused by a coordinate tap; another tap could move the caret.
-        if selector is not None:self.post(path+"/click",{})
+        if selector is not None and path in self._screen_targets:
+            self.screen_event("tap",point=self._screen_targets[path])
         if replace:
             self.post(path+"/clear",{})
         return self.type_pieces({"path":path,"focused":selector is None,"pieces":split_text(text,self.typing_piece),"typed":0,"total":len(text),

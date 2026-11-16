@@ -332,7 +332,7 @@ class LongInputTests(PhoneCase):
     def test_short_text_is_still_one_request(self):
         self.phone.type_text({"label": "Target"}, "x" * 200)
         self.assertEqual([path for _, path, _ in self.client.actions()],
-                         ["/element/target/click", "/element/target/clear", "/element/target/value"])
+                         ["/element/target/clear", "/element/target/value"])
 
     def test_budget_hands_back_a_token_and_finishes_with_the_original_options(self):
         self.phone.call_budget = 0
