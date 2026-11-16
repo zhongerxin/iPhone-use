@@ -107,6 +107,14 @@ def _node_supported(version):
     return (major == 20 and minor >= 19) or (major == 22 and minor >= 12) or major >= 24
 
 
+def _developer_mode_state(ios_version, reported="unknown"):
+    """Developer Mode exists only on iOS 16+; earlier versions have no such switch."""
+    match = re.match(r"\s*(\d+)\.", str(ios_version or ""))
+    if match and int(match.group(1)) < 16:
+        return "not_applicable"
+    return reported
+
+
 def _diagnose(text):
     text = text.lower()
     cases = [
@@ -212,7 +220,8 @@ class SetupManager:
                            "pairing_state": connection.get("pairingState", "unknown"),
                            "connection_state": connection.get("state", connection.get("tunnelState", "unknown")),
                            "transport": connection.get("transportType", "unknown"),
-                           "developer_mode": developer, "unlocked": "user_check_required"})
+                           "developer_mode": _developer_mode_state(version, developer),
+                           "unlocked": "user_check_required"})
         return result
 
     def discover(self):
@@ -227,7 +236,9 @@ class SetupManager:
                 try:
                     devices = [{"udid": item["identifier"], "name": item.get("name"), "model": item.get("modelName"),
                                 "ios_version": item.get("operatingSystemVersion"), "available": item.get("available"),
-                                "pairing_state": "unknown", "developer_mode": "unknown", "unlocked": "user_check_required"}
+                                "pairing_state": "unknown",
+                                "developer_mode": _developer_mode_state(item.get("operatingSystemVersion")),
+                                "unlocked": "user_check_required"}
                                for item in json.loads(fallback["stdout"])
                                if not item.get("simulator") and item.get("platform") == "com.apple.platform.iphoneos"]
                 except (ValueError, TypeError, KeyError):
@@ -270,7 +281,7 @@ class SetupManager:
                   "npm": bool(re.match(r"^(1[0-9]|[2-9][0-9])\.", npm_version)),
                   "configured": bool(config), "selected_device_present": bool(chosen),
                   "paired": chosen.get("pairing_state") == "paired" if chosen else False,
-                  "developer_mode": chosen.get("developer_mode") == "enabled" if chosen else False}
+                  "developer_mode": chosen.get("developer_mode") in {"enabled", "not_applicable"} if chosen else False}
         try:
             self._validate_config(config)
             source = self._source(config)

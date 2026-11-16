@@ -5,7 +5,7 @@
 | 未发现真机、device unavailable | 数据线是否支持数据、手机是否解锁并信任、Xcode 是否完成配对 | 重新连接并 discover；确认返回的是目标真机，避免误用模拟器或其他设备。 |
 | Xcode 尚未完成首次启动、许可或组件缺失 | doctor 返回的 developer directory、Xcode 版本、首次启动状态 | 用户安装完整 Xcode 并完成系统提示，再 doctor；Command Line Tools 单独安装不足以构建 PUA。 |
 | iOS 版本 / developer disk image 不兼容 | 当前 iOS、所选 Xcode 与设备准备错误 | 按兼容信息更新或选择合适 Xcode，再完成设备准备；不无限重试同一二进制。 |
-| Developer Mode disabled | 手机上的开发者模式开关和重启后确认 | 用户完成启用及重启，discover 重新识别设备，再 start；重启前可见设备不代表新状态已准备。 |
+| Developer Mode disabled | 手机上的开发者模式开关和重启后确认（iOS 16 起才有；iOS 15 及以下 discover 返回 `not_applicable`，无需处理） | 用户完成启用及重启，discover 重新识别设备，再 start；重启前可见设备不代表新状态已准备。 |
 | signing requires development team / no signing identity | Xcode 中 Apple Account、Team、开发证书 | 用户在 Xcode 登录并选择自己的 Team，再 configure/build；不要把账户密码放在配置文件。 |
 | bundle identifier cannot be registered / no profiles | Runner target 的 bundle ID 与团队 provisioning | 用用户团队可签名的 bundle ID 重新 configure；考虑 XCTest Runner 的 `.xctrunner` 后缀；再次构建验证。 |
 | maximum number of apps for free development profiles | Personal Team 是否已有 3 个开发 App | 列明系统指出的限制，用户自己选择是否卸载不需要的开发 App，或使用其已有的其他有效团队；不要自动删 App，也不要强迫购买开发者计划。 |

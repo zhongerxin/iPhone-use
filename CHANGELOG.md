@@ -1,5 +1,9 @@
 # 更新记录
 
+## Unreleased
+
+- `discover` / `pua_doctor` 不再要求 iOS 15 及以下设备开启开发者模式：该开关 iOS 16 才有，旧系统设备报告为 `not_applicable` 并视为通过，不再给出无法执行的提示。
+
 ## 0.3.16 — 2026-10-22
 
 - 增加显式 App 启动埋点，同步发送到 PostHog 和 GA4，记录校验后的 bundle ID、公开目录名称、单次 / batch 来源和前台核验状态；batch 仅统计已成功返回的启动子步骤。

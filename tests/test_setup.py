@@ -131,6 +131,33 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(parsed["pairing_state"], "unpaired")
         self.assertEqual(parsed["unlocked"], "user_check_required")
 
+    def test_developer_mode_is_not_applicable_before_ios_16(self):
+        state = wda_setup._developer_mode_state
+        self.assertEqual(state("15.8.6 (19H402)"), "not_applicable")
+        self.assertEqual(state("15.7", "disabled"), "not_applicable")
+        self.assertEqual(state("16.0", "disabled"), "disabled")
+        self.assertEqual(state("26.2", "enabled"), "enabled")
+        self.assertEqual(state(None), "unknown")
+        self.assertEqual(state("unknown"), "unknown")
+        old = {"result": {"devices": [{"identifier": "core", "hardwareProperties": {"reality": "physical", "deviceType": "iPhone", "udid": "OLD-UDID"},
+               "deviceProperties": {"name": "Old", "developerModeStatus": "disabled", "osVersionNumber": "15.8"},
+               "connectionProperties": {"pairingState": "paired", "tunnelState": "connected"}}]}}
+        self.assertEqual(wda_setup.SetupManager.parse_devices(old)[0]["developer_mode"], "not_applicable")
+
+    def test_doctor_does_not_ask_ios_15_device_to_enable_developer_mode(self):
+        self.configure()
+        device = {"udid": "00008150-ABCDEF0123456789", "ios_version": "15.8.6 (19H402)", "pairing_state": "paired",
+                  "developer_mode": "not_applicable", "unlocked": "user_check_required"}
+        with patch.object(self.manager, "discover", return_value={"ok": True, "devices": [device]}), \
+             patch.object(wda_setup.shutil, "which", return_value="/test/tool"), \
+             patch.object(wda_setup, "_run", return_value={"ok": True, "stdout": "v24.18.0", "stderr": ""}), \
+             patch.object(self.manager, "_probe_status", return_value={"ready": False}), \
+             patch.object(self.manager, "_profile_status", return_value={"known": False}), \
+             patch.object(self.manager, "mirroring_running", return_value=False):
+            result = self.manager.doctor()
+        self.assertTrue(result["checks"]["developer_mode"])
+        self.assertFalse(any("Developer Mode" in step for step in result["next_steps"]), result["next_steps"])
+
     def test_job_status_redacts_and_reports_actionable_signing_failure(self):
         job = self.job()
         job["state"] = "failed"
